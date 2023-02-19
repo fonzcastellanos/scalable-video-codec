@@ -1,5 +1,7 @@
 # Scalable Video Coding Based on Content and Gaze
 
+![License](https://img.shields.io/github/license/fonzcastellanos/scalable-video-codec)
+
 ## Overview
 
 This project is an exploration of scalable video coding based on content (i.e. physical objects) and point of gaze (i.e. where a viewer is looking). Scalability, in this context, is the ability to reconstruct meaningful video information from partial decompressed streams, thereby helping video systems meet their client device processing power and network bandwidth requirements.
