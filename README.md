@@ -143,11 +143,17 @@ encoder --kmeans-cluster-count 12 foreman.mp4
 ```
 
 ### encoder
-To run `encoder` with the default configuration, execute the following command.
+`encoder` writes the encoded video to the standard output stream `stdout`. 
+
+To run `encoder` with the default configuration and write the encoded video to a file, execute the following command, which redirects output from `stdout` to `encoded_video_file_path`.
 ```sh
 ./build/encoder video_file_path > encoded_video_file_path
 ```
-Note that I direct `stdout` to `encoded_video_file_path`, which is probably what you want to do because `encoder` writes encoded video to `stdout`.
+
+If you do not want to create a encoded video file but you still want to run the `decoder` on the `encoder` output, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command.
+```sh
+./build/encoder video_file_path | decoder
+```
 
 ### encoder-visualizer
 To run `encoder-visualizer` with the default configuration, execute the following command.
@@ -163,11 +169,17 @@ To see the name and type of each option, search for `#options` in [`encoder_conf
 To see the default values of the options, search for `#default-cfg` in [`encoder_config.cpp`](encoder_config.cpp). You'll see some functions containing the default values.
 
 ### decoder
-To run `decoder` with the default configuration, execute the following command.
+The `decoder` reads encoded video from the standard input stream `stdin`. 
+
+To run `decoder` with the default configuration and read encoded video from a file, execute the following command, which redirects input from `stdin` to `encoded_video_file_path`.
 ```sh
 ./build/decoder < encoded_video_file_path
 ```
-Note that I direct `stdin` to `encoded_video_file_path`, which is probably what you want to do because `decoder` reads encoded video from `stdin`.
+
+If you want to run `decoder` on the output of `encoder` without creating an encoded video file, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command.
+```sh
+./build/encoder video_file_path | decoder
+```
 
 To see the name and type of each option, search for `#options` in [`decoder_config.cpp`](decoder_config.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
 
