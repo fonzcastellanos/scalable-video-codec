@@ -152,7 +152,7 @@ To run `encoder` with the default configuration and write the encoded video to a
 
 If you do not want to create a encoded video file but you still want to run the `decoder` on the `encoder` output, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command.
 ```sh
-./build/encoder video_file_path | decoder
+./build/encoder video_file_path | ./build/decoder
 ```
 
 ### encoder-visualizer
@@ -178,7 +178,7 @@ To run `decoder` with the default configuration and read encoded video from a fi
 
 If you want to run `decoder` on the output of `encoder` without creating an encoded video file, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command.
 ```sh
-./build/encoder video_file_path | decoder
+./build/encoder video_file_path | ./build/decoder
 ```
 
 To see the name and type of each option, search for `#options` in [`decoder_config.cpp`](decoder_config.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
