@@ -35,6 +35,7 @@ For the sake of simplicity, I emulate the streaming feature. The encoder compute
 3. Estimate block-wise motion
     - Achieved by a variation of the hierarchical block matching algorithm (HBMA)
         - For more details, open the file [`motion.hpp`](motion.hpp) and read the comment block at the top of the file and the comment block for the function `EstimateMotionHierarchical`
+        - If Streaming SIMD Extensions 2 (SSE2) is supported on your platform, then a SSE2-based HBMA implementation (see function `EstimateMotionHierarchical16x16Sse2` in file [`motion.hpp`](motion.hpp)) is used to improve performance
 4. Estimate global motion using random sample consensus (RANSAC)
     - Global motion is assumed to be the camera motion
     - Inlier group is assumed to be the background motion vectors
@@ -113,7 +114,9 @@ cmake ..
 ```
 The `-G` option is omitted in `cmake ..`, so CMake will choose a default build system generator type based on your platform. To learn more about generators, see the [CMake docs](https://cmake.org/cmake/help/latest/manual/cmake-generators.7.html).
 
-Go back to the project directory
+If SSE2 is supported on your platform, then a SSE2-based HBMA implementation is used by default to improve performance. To disable the SSE2-based HBMA implementation and use the fallback implementation instead, execute `cmake -D SVC_MOTION_SSE2:BOOL=OFF ..`, which additionally sets the cache variable `SVC_MOTION_SSE2` to `OFF`.
+
+After having generated the build system, go back to the project directory
 ```sh
 cd ..
 ```
