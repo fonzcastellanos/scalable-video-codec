@@ -8,10 +8,7 @@
 #include "types.hpp"
 
 inline uint Pow2(uint exp) {
-  uint res = 1;
-  for (uint i = 0; i < exp; ++i) {
-    res <<= 1;
-  }
+  uint res = 1 << exp;
   return res;
 }
 
