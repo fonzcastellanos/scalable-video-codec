@@ -1,9 +1,6 @@
 #ifndef SCALABLE_VIDEO_CODEC_DECODER_CONFIG_HPP
 #define SCALABLE_VIDEO_CODEC_DECODER_CONFIG_HPP
 
-#include <cassert>
-#include <cstdio>
-
 #include "codec.hpp"
 #include "types.hpp"
 

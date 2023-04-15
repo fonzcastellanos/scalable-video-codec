@@ -1,6 +1,7 @@
 #include "decoder_config.hpp"
 
 #include <cassert>
+#include <cstdio>
 
 #include "cli.hpp"
 
