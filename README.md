@@ -192,7 +192,6 @@ To see the default values of the options, search for `#default-cfg` in [`decoder
 - Compress motion vectors using entropy coding
 - Adaptive tuning of certain parameters
 - Do I/O on a separate thread
-- Use SIMD instructions to vectorize motion estimation algorithms
 - Implement streaming
 - Eliminate dependence on OpenCV
 
