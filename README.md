@@ -109,9 +109,9 @@ The build system must be generated before the project can be built. From the pro
 ```sh
 mkdir build
 cd build
-cmake ../src
+cmake ..
 ```
-The `-G` option is omitted in `cmake ../src`, so CMake will choose a default build system generator type based on your platform. To learn more about generators, see the [CMake docs](https://cmake.org/cmake/help/latest/manual/cmake-generators.7.html).
+The `-G` option is omitted in `cmake ..`, so CMake will choose a default build system generator type based on your platform. To learn more about generators, see the [CMake docs](https://cmake.org/cmake/help/latest/manual/cmake-generators.7.html).
 
 Go back to the project directory
 ```sh
