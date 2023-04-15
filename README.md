@@ -171,7 +171,7 @@ To see the name and type of each option, search for `#options` in [`encoder_conf
 
 To see the default values of the options, search for `#default-cfg` in [`encoder_config.cpp`](encoder_config.cpp). You'll see some functions containing the default values.
 
-If the SSE2-based HBMA implementation is being used, then the motion block dimensions and pyramid level count cannot be set and the defautl values are used.
+If the SSE2-based HBMA implementation is being used, then the motion vector block dimensions and pyramid level count cannot be set and the default values are used.
 
 ### decoder
 The `decoder` reads encoded video from the standard input stream `stdin`. 
