@@ -125,11 +125,31 @@ starting from those of the base level provided as parameters: `block_w`
 and `block_h`.
 
 The frame and block dimension parameters are of the base pyramid levels.
+
+The block width and height are greater than 0.
+
+The frame width and height are divisible by the block width and height,
+respectively, and are greater than 0.
 */
 void EstimateMotionHierarchical(const uchar* const* tracked_pyramid,
                                 const uchar* const* anchor_pyramid,
                                 uint level_count, uint frame_w, uint frame_h,
                                 uint search_range, uint block_w, uint block_h,
                                 Vec2f* motion_field, float* min_mad);
+#ifdef __SSE2__
+/*
+Calculates the motion field using a variation of HBMA.
+
+Like `EstimateMotionHierachical`, except SSE2 instructions are used and the
+following additional assumptions are made:
+  - Pyramids have 4 levels.
+  - Block width and height are 16.
+*/
+void EstimateMotionHierarchical16x16Sse2(const uchar* const* tracked_pyramid,
+                                         const uchar* const* anchor_pyramid,
+                                         uint frame_w, uint frame_h,
+                                         uint search_range, Vec2f* mv_field,
+                                         float* min_mad);
+#endif
 
 #endif  // SCALABLE_VIDEO_CODEC_MOTION_HPP

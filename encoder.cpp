@@ -434,11 +434,18 @@ int main(int argc, char* argv[]) {
     cv::extractChannel(enc.yuv_padded_frame, enc.y_padded_frame, 0);
     cv::buildPyramid(enc.y_padded_frame, enc.pyr, enc.cfg.pyr_lvl_count - 1);
 
+#if defined(__SSE2__) && defined(SVC_MOTION_SSE2)
+    EstimateMotionHierarchical16x16Sse2(
+        enc.prev_pyr_data.data(), enc.pyr_data.data(), enc.padded_frame_w,
+        enc.padded_frame_h, enc.cfg.mv_search_range, enc.mv_field.data(),
+        enc.mv_field_min_mad.data());
+#else
     EstimateMotionHierarchical(
         enc.prev_pyr_data.data(), enc.pyr_data.data(), enc.cfg.pyr_lvl_count,
         enc.padded_frame_w, enc.padded_frame_h, enc.cfg.mv_search_range,
         enc.cfg.mv_block_w, enc.cfg.mv_block_h, enc.mv_field.data(),
         enc.mv_field_min_mad.data());
+#endif
 
 #ifdef VISUALIZE
     enc.padded_frame.copyTo(motion_field_view);

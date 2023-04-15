@@ -1,50 +1,43 @@
 #include "motion.hpp"
 
+#ifdef __SSE2__
+#include <emmintrin.h>
+#endif
+
 #include <cassert>
 #include <limits>
 #include <random>
 
-/**
- * @brief Calculates the mean absolute difference (MAD) between two blocks, each
- * from a different frame.
- *
- * A block's position is defined by the position of its top left corner.
- *
- * @param tracked_frame
- * @param anchor_frame
- * @param frame_w width of the frames
- * @param frame_h height of the frames
- * @param tracked_block_position
- * @param anchor_block_position
- * @param block_w width of the blocks
- * @param block_h height of the blocks
- * @return MAD
- */
-static float BlockMad(const uchar* tracked_frame, const uchar* anchor_frame,
-                      uint frame_w, uint frame_h, Vec2ui tracked_block_position,
-                      Vec2ui anchor_block_position, uint block_w,
-                      uint block_h) {
-  assert(tracked_frame);
-  assert(anchor_frame);
+/*
+Calculates the mean absolute difference (MAD) between two blocks, each from a
+different frame.
 
-  float mad = 0;
-  uint pixel_count = 1;
+Supports block areas <= 256.
+*/
+static float Mad(const uchar* a_frame, const uchar* b_frame, uint frame_w,
+                 Vec2ui a_block_pos, Vec2ui b_block_pos, uint block_w,
+                 uint block_h) {
+  assert(a_frame);
+  assert(b_frame);
 
-  for (uint y = 0; y < block_h; ++y) {
-    for (uint x = 0; x < block_w; ++x) {
-      uint ti = (tracked_block_position.y + y) * frame_w +
-                tracked_block_position.x + x;
+  assert(frame_w > 0);
+  assert(block_w > 0);
+  assert(block_h > 0);
 
-      uint ai =
-          (anchor_block_position.y + y) * frame_w + anchor_block_position.x + x;
+  uint sad = 0;
 
-      uchar abs_diff = AbsDiff(tracked_frame[ti], anchor_frame[ai]);
+  for (uint k = 0; k < block_h; ++k) {
+    for (uint j = 0; j < block_w; ++j) {
+      uint ai = (a_block_pos.y + k) * frame_w + a_block_pos.x + j;
+      uint bi = (b_block_pos.y + k) * frame_w + b_block_pos.x + j;
 
-      mad += (abs_diff - mad) / pixel_count;
-
-      ++pixel_count;
+      sad += AbsDiff(a_frame[ai], b_frame[bi]);
     }
   }
+
+  uint count = block_w * block_h;
+
+  float mad = (float)sad / count;
 
   return mad;
 }
@@ -94,9 +87,8 @@ void EstimateGlobalMotionExhaustiveSearch(
       tracked_block_pos.x = tracked_block_begin_x;
       anchor_block_pos.x = (int)tracked_block_pos.x - dx;
 
-      float mad =
-          BlockMad(tracked_frame, anchor_frame, frame_w, frame_h,
-                   tracked_block_pos, anchor_block_pos, block_w, block_h);
+      float mad = Mad(tracked_frame, anchor_frame, frame_w, tracked_block_pos,
+                      anchor_block_pos, block_w, block_h);
 
       if (mad < *min_mad) {
         *min_mad = mad;
@@ -326,8 +318,8 @@ void EstimateMotionExhaustiveSearch(const uchar* tracked_frame,
           tracked_block_pos.x = x;
 
           float mad =
-              BlockMad(tracked_frame, anchor_frame, frame_w, frame_h,
-                       tracked_block_pos, anchor_block_pos, block_w, block_h);
+              Mad(tracked_frame, anchor_frame, frame_w, tracked_block_pos,
+                  anchor_block_pos, block_w, block_h);
 
           if (mad <= min_mad[mf_i]) {
             min_mad[mf_i] = mad;
@@ -347,35 +339,38 @@ void EstimateMotionExhaustiveSearch(const uchar* tracked_frame,
   }
 }
 
-static void RefineHierarchicalMotionEstimation(
-    const uchar* tracked_frame, const uchar* anchor_frame, uint frame_w,
-    uint frame_h, uint block_w, uint block_h, uint search_range,
-    Vec2f* motion_field, float* min_mad) {
+static void RefineHierMotionEst(const uchar* tracked_frame,
+                                const uchar* anchor_frame, uint frame_w,
+                                uint frame_h, uint block_w, uint block_h,
+                                uint search_range, Vec2f* mv_field,
+                                float* min_mad) {
   assert(tracked_frame);
   assert(anchor_frame);
-  assert(motion_field);
+  assert(mv_field);
   assert(min_mad);
 
+  assert(frame_w > 0);
+  assert(frame_h > 0);
   assert(block_w > 0);
   assert(block_h > 0);
 
   assert(frame_w % block_w == 0);
   assert(frame_h % block_h == 0);
 
-  uint mfield_w = frame_w / block_w;
-  uint mfield_h = frame_h / block_h;
+  uint mv_field_w = frame_w / block_w;
+  uint mv_field_h = frame_h / block_h;
 
   Vec2ui anchor_block_pos;
-  for (uint mf_y = 0; mf_y < mfield_h; ++mf_y) {
-    anchor_block_pos.y = mf_y * block_h;
+  for (uint mvf_y = 0; mvf_y < mv_field_h; ++mvf_y) {
+    anchor_block_pos.y = mvf_y * block_h;
 
-    for (uint mf_x = 0; mf_x < mfield_w; ++mf_x) {
-      anchor_block_pos.x = mf_x * block_w;
+    for (uint mvf_x = 0; mvf_x < mv_field_w; ++mvf_x) {
+      anchor_block_pos.x = mvf_x * block_w;
 
-      uint mf_i = mf_y * mfield_w + mf_x;
+      uint mvf_i = mvf_y * mv_field_w + mvf_x;
 
       Vec2ui initial_tracked_block_pos = Vec2iToVec2ui(
-          Vec2uiToVec2i(anchor_block_pos) + Vec2fToVec2i(motion_field[mf_i]));
+          Vec2uiToVec2i(anchor_block_pos) + Vec2fToVec2i(mv_field[mvf_i]));
 
       uint srch_region_begin_y =
           Max(0, (int)initial_tracked_block_pos.y - (int)search_range);
@@ -400,13 +395,13 @@ static void RefineHierarchicalMotionEstimation(
           tracked_block_pos.x = x;
 
           float mad =
-              BlockMad(tracked_frame, anchor_frame, frame_w, frame_h,
-                       tracked_block_pos, anchor_block_pos, block_w, block_h);
+              Mad(tracked_frame, anchor_frame, frame_w, tracked_block_pos,
+                  anchor_block_pos, block_w, block_h);
 
-          if (mad < min_mad[mf_i]) {
-            min_mad[mf_i] = mad;
-            motion_field[mf_i] = Vec2iToVec2f(Vec2uiToVec2i(tracked_block_pos) -
-                                              Vec2uiToVec2i(anchor_block_pos));
+          if (mad < min_mad[mvf_i]) {
+            min_mad[mvf_i] = mad;
+            mv_field[mvf_i] = Vec2iToVec2f(Vec2uiToVec2i(tracked_block_pos) -
+                                           Vec2uiToVec2i(anchor_block_pos));
           }
         }
       }
@@ -416,7 +411,7 @@ static void RefineHierarchicalMotionEstimation(
 
 void EstimateMotionHierarchical(const uchar* const* tracked_pyramid,
                                 const uchar* const* anchor_pyramid,
-                                uint num_levels, uint frame_w, uint frame_h,
+                                uint level_count, uint frame_w, uint frame_h,
                                 uint search_range, uint block_w, uint block_h,
                                 Vec2f* motion_field, float* min_mad) {
   assert(tracked_pyramid);
@@ -424,17 +419,20 @@ void EstimateMotionHierarchical(const uchar* const* tracked_pyramid,
   assert(motion_field);
   assert(min_mad);
 
-  assert(num_levels > 0);
+  assert(level_count > 0);
   assert(block_w > 0);
   assert(block_h > 0);
+  assert(frame_w > 0);
+  assert(frame_h > 0);
+
   assert(frame_w % block_w == 0);
   assert(frame_h % block_h == 0);
 
-  uint top_lvl_reduction_factor = Pow2(num_levels - 1);
+  uint top_lvl_reduction_factor = Pow2(level_count - 1);
 
-  uint top_lvl_search_range = search_range / top_lvl_reduction_factor;
+  assert(search_range >= top_lvl_reduction_factor);
 
-  assert(top_lvl_search_range > 0);
+  uint top_lvl_srch_range = search_range / top_lvl_reduction_factor;
 
   uint fw = frame_w / top_lvl_reduction_factor;
   uint fh = frame_h / top_lvl_reduction_factor;
@@ -443,27 +441,310 @@ void EstimateMotionHierarchical(const uchar* const* tracked_pyramid,
   uint bh = block_h / top_lvl_reduction_factor;
 
   EstimateMotionExhaustiveSearch(
-      tracked_pyramid[num_levels - 1], anchor_pyramid[num_levels - 1], fw, fh,
-      top_lvl_search_range, bw, bh, motion_field, min_mad);
+      tracked_pyramid[level_count - 1], anchor_pyramid[level_count - 1], fw, fh,
+      top_lvl_srch_range, bw, bh, motion_field, min_mad);
 
-  uint mfield_w = fw / bw;
-  uint mfield_h = fh / bh;
+  uint mv_field_w = frame_w / block_w;
+  uint mv_field_h = frame_h / block_h;
+  uint mv_field_sz = mv_field_w * mv_field_h;
 
-  uint mfield_sz = mfield_w * mfield_h;
-
-  for (int l = (int)num_levels - 2; l >= 0; --l) {
+  for (int l = (int)level_count - 2; l >= 0; --l) {
     fw *= 2;
     fh *= 2;
 
     bw *= 2;
     bh *= 2;
 
-    for (uint i = 0; i < mfield_sz; ++i) {
+    for (uint i = 0; i < mv_field_sz; ++i) {
       motion_field[i] *= 2.0f;
     }
 
-    RefineHierarchicalMotionEstimation(tracked_pyramid[l], anchor_pyramid[l],
-                                       fw, fh, bw, bh, top_lvl_search_range,
-                                       motion_field, min_mad);
+    RefineHierMotionEst(tracked_pyramid[l], anchor_pyramid[l], fw, fh, bw, bh,
+                        top_lvl_srch_range, motion_field, min_mad);
   }
 }
+
+#ifdef __SSE2__
+/*
+Calculates the mean absolute difference (MAD) between two 16x16 blocks, each
+from a different frame.
+*/
+static float Mad16x16Sse2(const uchar* a_frame, const uchar* b_frame,
+                          uint frame_w, Vec2ui a_block_pos,
+                          Vec2ui b_block_pos) {
+  static constexpr uint kBlockW = 16;
+  static constexpr uint kBlockH = 16;
+  static constexpr float kBlockArea = kBlockW * kBlockH;
+
+  assert(a_frame);
+  assert(b_frame);
+
+  assert(frame_w >= kBlockW);
+
+  __m128i sum1 = _mm_setzero_si128();
+  __m128i sum2 = _mm_setzero_si128();
+
+  for (uint i = 0; i < kBlockH; i += 2) {
+    __m128i a1 = _mm_loadu_si128(
+        (__m128i*)(a_frame + (a_block_pos.y + i) * frame_w + a_block_pos.x));
+    __m128i b1 = _mm_loadu_si128(
+        (__m128i*)(b_frame + (b_block_pos.y + i) * frame_w + b_block_pos.x));
+
+    __m128i a2 = _mm_loadu_si128((
+        __m128i*)(a_frame + (a_block_pos.y + i + 1) * frame_w + a_block_pos.x));
+    __m128i b2 = _mm_loadu_si128((
+        __m128i*)(b_frame + (b_block_pos.y + i + 1) * frame_w + b_block_pos.x));
+
+    sum1 = _mm_add_epi64(sum1, _mm_sad_epu8(a1, b1));
+    sum2 = _mm_add_epi64(sum2, _mm_sad_epu8(a2, b2));
+  }
+
+  sum1 = _mm_add_epi64(sum1, sum2);
+
+  long long sad =
+      _mm_cvtsi128_si64(_mm_add_epi64(sum1, _mm_srli_si128(sum1, 8)));
+
+  float mad = sad / kBlockArea;
+
+  return mad;
+}
+
+/*
+Calculates the mean absolute difference (MAD) between two 8x8 blocks, each
+from a different frame.
+*/
+static float Mad8x8Sse2(const uchar* a_frame, const uchar* b_frame,
+                        uint frame_w, Vec2ui a_block_pos, Vec2ui b_block_pos) {
+  static constexpr uint kBlockW = 8;
+  static constexpr uint kBlockH = 8;
+  static constexpr float kBlockArea = kBlockW * kBlockH;
+
+  assert(a_frame);
+  assert(b_frame);
+
+  assert(frame_w >= kBlockW);
+
+  __m128i sum = _mm_setzero_si128();
+
+  for (uint i = 0; i < kBlockH; i += 2) {
+    __m128i a0 = _mm_loadu_si64(
+        (__m128i*)(a_frame + (a_block_pos.y + i) * frame_w + a_block_pos.x));
+    __m128i a1 = _mm_loadu_si64((
+        __m128i*)(a_frame + (a_block_pos.y + i + 1) * frame_w + a_block_pos.x));
+    __m128i a = _mm_unpacklo_epi8(a0, a1);
+
+    __m128i b0 = _mm_loadu_si64(
+        (__m128i*)(b_frame + (b_block_pos.y + i) * frame_w + b_block_pos.x));
+    __m128i b1 = _mm_loadu_si64((
+        __m128i*)(b_frame + (b_block_pos.y + i + 1) * frame_w + b_block_pos.x));
+    __m128i b = _mm_unpacklo_epi8(b0, b1);
+
+    sum = _mm_add_epi64(sum, _mm_sad_epu8(a, b));
+  }
+
+  long long sad = _mm_cvtsi128_si64(_mm_add_epi64(sum, _mm_srli_si128(sum, 8)));
+
+  float mad = sad / kBlockArea;
+
+  return mad;
+}
+
+static void RefineHierMotionEst16x16Sse2(const uchar* tracked_frame,
+                                         const uchar* anchor_frame,
+                                         uint frame_w, uint frame_h,
+                                         uint search_range, Vec2f* mv_field,
+                                         float* min_mad) {
+  static constexpr uint kBlockW = 16;
+  static constexpr uint kBlockH = 16;
+
+  assert(tracked_frame);
+  assert(anchor_frame);
+  assert(mv_field);
+  assert(min_mad);
+
+  assert(frame_w > 0);
+  assert(frame_h > 0);
+
+  assert(frame_w % kBlockW == 0);
+  assert(frame_h % kBlockH == 0);
+
+  uint mv_field_w = frame_w / kBlockW;
+  uint mv_field_h = frame_h / kBlockH;
+
+  Vec2ui anchor_block_pos;
+  for (uint mvf_y = 0; mvf_y < mv_field_h; ++mvf_y) {
+    anchor_block_pos.y = mvf_y * kBlockH;
+
+    for (uint mvf_x = 0; mvf_x < mv_field_w; ++mvf_x) {
+      anchor_block_pos.x = mvf_x * kBlockW;
+
+      uint mvf_i = mvf_y * mv_field_w + mvf_x;
+
+      Vec2ui initial_tracked_block_pos = Vec2iToVec2ui(
+          Vec2uiToVec2i(anchor_block_pos) + Vec2fToVec2i(mv_field[mvf_i]));
+
+      uint srch_region_begin_y =
+          Max(0, (int)initial_tracked_block_pos.y - (int)search_range);
+      uint srch_region_end_y =
+          Min(frame_h - kBlockH + 1,
+              initial_tracked_block_pos.y + search_range + 1);
+
+      uint srch_region_begin_x =
+          Max(0, (int)initial_tracked_block_pos.x - (int)search_range);
+      uint srch_region_end_x =
+          Min(frame_w - kBlockW + 1,
+              initial_tracked_block_pos.x + search_range + 1);
+
+      // TODO: Should I skip calculating mad for block at (tracked_x,
+      // tracked_y)?
+      //  Is it redundant?
+      Vec2ui tracked_block_pos;
+      for (uint y = srch_region_begin_y; y < srch_region_end_y; ++y) {
+        tracked_block_pos.y = y;
+
+        for (uint x = srch_region_begin_x; x < srch_region_end_x; ++x) {
+          tracked_block_pos.x = x;
+
+          float mad = Mad16x16Sse2(tracked_frame, anchor_frame, frame_w,
+                                   tracked_block_pos, anchor_block_pos);
+
+          if (mad < min_mad[mvf_i]) {
+            min_mad[mvf_i] = mad;
+            mv_field[mvf_i] = Vec2iToVec2f(Vec2uiToVec2i(tracked_block_pos) -
+                                           Vec2uiToVec2i(anchor_block_pos));
+          }
+        }
+      }
+    }
+  }
+}
+
+static void RefineHierMotionEst8x8Sse2(const uchar* tracked_frame,
+                                       const uchar* anchor_frame, uint frame_w,
+                                       uint frame_h, uint search_range,
+                                       Vec2f* mv_field, float* min_mad) {
+  static constexpr uint kBlockW = 8;
+  static constexpr uint kBlockH = 8;
+
+  assert(tracked_frame);
+  assert(anchor_frame);
+  assert(mv_field);
+  assert(min_mad);
+
+  assert(frame_w > 0);
+  assert(frame_h > 0);
+
+  assert(frame_w % kBlockW == 0);
+  assert(frame_h % kBlockH == 0);
+
+  uint mv_field_w = frame_w / kBlockW;
+  uint mv_field_h = frame_h / kBlockH;
+
+  Vec2ui anchor_block_pos;
+  for (uint mvf_y = 0; mvf_y < mv_field_h; ++mvf_y) {
+    anchor_block_pos.y = mvf_y * kBlockH;
+
+    for (uint mvf_x = 0; mvf_x < mv_field_w; ++mvf_x) {
+      anchor_block_pos.x = mvf_x * kBlockW;
+
+      uint mvf_i = mvf_y * mv_field_w + mvf_x;
+
+      Vec2ui initial_tracked_block_pos = Vec2iToVec2ui(
+          Vec2uiToVec2i(anchor_block_pos) + Vec2fToVec2i(mv_field[mvf_i]));
+
+      uint srch_region_begin_y =
+          Max(0, (int)initial_tracked_block_pos.y - (int)search_range);
+      uint srch_region_end_y =
+          Min(frame_h - kBlockH + 1,
+              initial_tracked_block_pos.y + search_range + 1);
+
+      uint srch_region_begin_x =
+          Max(0, (int)initial_tracked_block_pos.x - (int)search_range);
+      uint srch_region_end_x =
+          Min(frame_w - kBlockW + 1,
+              initial_tracked_block_pos.x + search_range + 1);
+
+      // TODO: Should I skip calculating mad for block at (tracked_x,
+      // tracked_y)?
+      //  Is it redundant?
+      Vec2ui tracked_block_pos;
+      for (uint y = srch_region_begin_y; y < srch_region_end_y; ++y) {
+        tracked_block_pos.y = y;
+
+        for (uint x = srch_region_begin_x; x < srch_region_end_x; ++x) {
+          tracked_block_pos.x = x;
+
+          float mad = Mad8x8Sse2(tracked_frame, anchor_frame, frame_w,
+                                 tracked_block_pos, anchor_block_pos);
+
+          if (mad < min_mad[mvf_i]) {
+            min_mad[mvf_i] = mad;
+            mv_field[mvf_i] = Vec2iToVec2f(Vec2uiToVec2i(tracked_block_pos) -
+                                           Vec2uiToVec2i(anchor_block_pos));
+          }
+        }
+      }
+    }
+  }
+}
+
+void EstimateMotionHierarchical16x16Sse2(const uchar* const* tracked_pyramid,
+                                         const uchar* const* anchor_pyramid,
+                                         uint frame_w, uint frame_h,
+                                         uint search_range, Vec2f* mv_field,
+                                         float* min_mad) {
+  static constexpr uint kLevelCount = 4;
+  static constexpr uint kBlockW = 16;
+  static constexpr uint kBlockH = 16;
+  static constexpr uint kTopLevelReductionFactor = 1 << (kLevelCount - 1);
+
+  assert(tracked_pyramid);
+  assert(anchor_pyramid);
+  assert(mv_field);
+  assert(min_mad);
+
+  assert(frame_w > 0);
+  assert(frame_h > 0);
+
+  assert(frame_w % kBlockW == 0);
+  assert(frame_h % kBlockH == 0);
+
+  assert(search_range >= kTopLevelReductionFactor);
+
+  uint top_lvl_srch_range = search_range / kTopLevelReductionFactor;
+
+  uint fw = frame_w / kTopLevelReductionFactor;
+  uint fh = frame_h / kTopLevelReductionFactor;
+
+  EstimateMotionExhaustiveSearch(tracked_pyramid[3], anchor_pyramid[3], fw, fh,
+                                 top_lvl_srch_range, 2, 2, mv_field, min_mad);
+
+  uint mv_field_w = frame_w / kBlockW;
+  uint mv_field_h = frame_h / kBlockH;
+  uint mv_field_sz = mv_field_w * mv_field_h;
+
+  for (uint i = 0; i < mv_field_sz; ++i) {
+    mv_field[i] *= 2.0f;
+  }
+  fw *= 2;
+  fh *= 2;
+  RefineHierMotionEst(tracked_pyramid[2], anchor_pyramid[2], fw, fh, 4, 4,
+                      top_lvl_srch_range, mv_field, min_mad);
+
+  for (uint i = 0; i < mv_field_sz; ++i) {
+    mv_field[i] *= 2.0f;
+  }
+  fw *= 2;
+  fh *= 2;
+  RefineHierMotionEst8x8Sse2(tracked_pyramid[1], anchor_pyramid[1], fw, fh,
+                             top_lvl_srch_range, mv_field, min_mad);
+
+  for (uint i = 0; i < mv_field_sz; ++i) {
+    mv_field[i] *= 2.0f;
+  }
+  fw *= 2;
+  fh *= 2;
+  RefineHierMotionEst16x16Sse2(tracked_pyramid[0], anchor_pyramid[0], fw, fh,
+                               top_lvl_srch_range, mv_field, min_mad);
+}
+#endif

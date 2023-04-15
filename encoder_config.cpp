@@ -16,26 +16,30 @@ CodecStatus ParseConfig(uint argc, char* argv[], Config* c) {
   /*******************************************************************************
    * Command-line Options    #options
    *******************************************************************************/
-  Option opts[]{
-      {"mv-block-w", kOptionTypeUInt, &ec->mv_block_w},
-      {"mv-block-h", kOptionTypeUInt, &ec->mv_block_h},
-      {"mv-search-range", kOptionTypeUInt, &ec->mv_search_range},
-      {"pyr-lvl-count", kOptionTypeUInt, &ec->pyr_lvl_count},
-      {"ransac-subset-sz", kOptionTypeUInt, &ec->ransac.subset_sz},
-      {"ransac-inlier-thresh", kOptionTypeFloat, &ec->ransac.inlier_thresh},
-      {"ransac-success-prob", kOptionTypeFloat, &ec->ransac.success_prob},
-      {"ransac-inlier-ratio", kOptionTypeFloat, &ec->ransac.inlier_ratio},
-      {"morph-rect-w", kOptionTypeUInt, &ec->morph_rect_w},
-      {"morph-rect-h", kOptionTypeUInt, &ec->morph_rect_h},
-      {"kmeans-cluster-count", kOptionTypeUInt, &ec->kmeans.cluster_count},
-      {"kmeans-attempt-count", kOptionTypeUInt, &ec->kmeans.attempt_count},
-      {"kmeans-max-iter-count", kOptionTypeUInt, &ec->kmeans.max_iter_count},
-      {"kmeans-epsilon", kOptionTypeFloat, &ec->kmeans.epsilon},
-      {"connected-components-connectivity", kOptionTypeUInt,
-       &ec->connected_components_connectivity},
-      {"transform-block-w", kOptionTypeUInt, &ec->transform_block_w},
-      {"transform-block-h", kOptionTypeUInt, &ec->transform_block_h},
-      {"verbose", kOptionTypeBoolean, &c->verbose}};
+  Option opts[] {
+#if !defined(__SSE2__) || !defined(SVC_MOTION_SSE2)
+    {"mv-block-w", kOptionTypeUInt, &ec->mv_block_w},
+        {"mv-block-h", kOptionTypeUInt, &ec->mv_block_h},
+        {"pyr-lvl-count", kOptionTypeUInt, &ec->pyr_lvl_count},
+#endif
+        {"mv-search-range", kOptionTypeUInt, &ec->mv_search_range},
+        {"ransac-subset-sz", kOptionTypeUInt, &ec->ransac.subset_sz},
+        {"ransac-inlier-thresh", kOptionTypeFloat, &ec->ransac.inlier_thresh},
+        {"ransac-success-prob", kOptionTypeFloat, &ec->ransac.success_prob},
+        {"ransac-inlier-ratio", kOptionTypeFloat, &ec->ransac.inlier_ratio},
+        {"morph-rect-w", kOptionTypeUInt, &ec->morph_rect_w},
+        {"morph-rect-h", kOptionTypeUInt, &ec->morph_rect_h},
+        {"kmeans-cluster-count", kOptionTypeUInt, &ec->kmeans.cluster_count},
+        {"kmeans-attempt-count", kOptionTypeUInt, &ec->kmeans.attempt_count},
+        {"kmeans-max-iter-count", kOptionTypeUInt, &ec->kmeans.max_iter_count},
+        {"kmeans-epsilon", kOptionTypeFloat, &ec->kmeans.epsilon},
+        {"connected-components-connectivity", kOptionTypeUInt,
+         &ec->connected_components_connectivity},
+        {"transform-block-w", kOptionTypeUInt, &ec->transform_block_w},
+        {"transform-block-h", kOptionTypeUInt, &ec->transform_block_h}, {
+      "verbose", kOptionTypeBoolean, &c->verbose
+    }
+  };
 
   uint argi;
   uint opts_size = sizeof(opts) / sizeof(opts[0]);
