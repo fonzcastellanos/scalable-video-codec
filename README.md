@@ -110,9 +110,9 @@ The build system must be generated before the project can be built. From the pro
 ```sh
 mkdir build
 cd build
-cmake ..
+cmake -DCMAKE_BUILD_TYPE:STRING=Release ..
 ```
-The `-G` option is omitted in `cmake ..`, so CMake will choose a default build system generator type based on your platform. To learn more about generators, see the [CMake docs](https://cmake.org/cmake/help/latest/manual/cmake-generators.7.html).
+The `-G` option is omitted in `cmake -DCMAKE_BUILD_TYPE:STRING=Release ..`, so CMake will choose a default build system generator type based on your platform. To learn more about generators, see the [CMake docs](https://cmake.org/cmake/help/latest/manual/cmake-generators.7.html).
 
 If SSE2 is supported on your platform, then a SSE2-based HBMA implementation is used by default to improve performance. To disable the SSE2-based HBMA implementation and use the fallback implementation instead, execute `cmake -D SVC_MOTION_SSE2:BOOL=OFF ..`, which additionally sets the cache variable `SVC_MOTION_SSE2` to `OFF`.
 
