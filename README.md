@@ -8,13 +8,13 @@ This project is an exploration of scalable video coding based on content (i.e. p
 
 The encoder first performs block-based motion estimation and then segments the video into regions, which are sets of spatially-connected blocks with similar motion. Each region represents either the background or a distinct moving (i.e. foreground) object. Afterwards, the encoder applies the Discrete Cosine Transform (DCT) and the resulting coefficients and identifier of each region are written to a file.
 
-<video src="https://user-images.githubusercontent.com/4334520/219800414-400cd0c6-75cd-4a47-95ed-9866ebfcdd7e.mov"></video>
+https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/1bf1e162-620e-463f-b8c2-76f2533245dd
 
 In a typical streaming architecture, each region would be converted into quantized DCT coefficients based on bandwidth and gaze requirements, and the compressed data would be buffered for streaming. In such architectures, the continuous bandwidth sensing would control the quantization of the DCT coefficients of each region, with background transform blocks generally being more quantized than foreground transform blocks. The gaze requirements determine which transform blocks need to be more clear, with transform blocks in the gaze areas being less quantized than those outside of it. In these cases, both properties of bandwidth and gaze control are communicated by the client to the streaming encoder.
 
 For the sake of simplicity, I emulate the streaming feature. The encoder computes and stores all the transform coefficients, but the decoder will decide on the degree of quantization to apply based on whether a region part of the foreground or is the background and where the user is gazing. This approach allows me to focus on block-based motion estimation and segmentation without tackling the the complexities of streaming. I also emulate the gaze point, which is determined by the position of the mouse cursor.
 
-<video src="https://user-images.githubusercontent.com/4334520/219826986-723024b9-adc3-48d6-8ac7-5541b2009453.mov"></video>
+https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/b19de508-a9f9-4a1d-991d-59e45762e3d8
 
 ## Video Model 
 - Illumination model: constant intensity assumption
@@ -76,14 +76,13 @@ For example, the name of the videos used in the [overview](#overview) are
 - `encoder-visualizer_dynamic-background_fall.mov`
 - `decoder_dynamic-background_fall.mov`.
 
-<video src="https://user-images.githubusercontent.com/4334520/219816152-e6fad12e-f218-4f15-a645-ce3a7e3c101f.mov"></video>
+https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/20c57766-e5c0-454d-bb8b-8dd19f1e48f2
 
-<video src="https://user-images.githubusercontent.com/4334520/219827606-9e425072-3e89-4a0d-b223-54c9301106c3.mov"></video>
+https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/135de7cd-9a64-4cd4-9c3e-2ba9ba0595d9
 
+https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/37753c14-250e-4690-be98-a6c9e1cc52d5
 
-<video src="https://user-images.githubusercontent.com/4334520/219825739-d47cdb67-67d7-4bb4-b083-ba9e05750f17.mov"></video>
-
-<video src="https://user-images.githubusercontent.com/4334520/219827931-12d95fc5-3b66-4e92-8e19-7cc6fe0c65e2.mov"></video>
+https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/04843ce0-a030-4d0c-bfe0-8e069c11c465
 
 ## Build Requirements
 - C++ compiler
