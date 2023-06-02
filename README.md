@@ -166,9 +166,9 @@ To run `encoder-visualizer` with the default configuration, execute the followin
 
 `encoder` and `encoder-visualizer` have the same options.
 
-To see the name and type of each option, search for `#options` in [`encoder_config.cpp`](encoder_config.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
+To see the name and type of each option, search for `#options` in [`cmd/encoder.cpp`](cmd/encoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
 
-To see the default values of the options, search for `#default-cfg` in [`encoder_config.cpp`](encoder_config.cpp). You'll see some functions containing the default values.
+To see the default values of the options, search for `#default-cfg` in [`encoder.cpp`](encoder.cpp). You'll see some functions containing the default values.
 
 If the SSE2-based HBMA implementation is being used, then the motion vector block dimensions and pyramid level count cannot be set and the default values are used.
 
@@ -185,9 +185,9 @@ If you want to run `decoder` on the output of `encoder` without creating an enco
 ./build/encoder video_file_path | ./build/decoder
 ```
 
-To see the name and type of each option, search for `#options` in [`decoder_config.cpp`](decoder_config.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
+To see the name and type of each option, search for `#options` in [`cmd/decoder.cpp`](cmd/decoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
 
-To see the default values of the options, search for `#default-cfg` in [`decoder_config.cpp`](decoder_config.cpp). You'll see some functions containing the default values.
+To see the default values of the options, search for `#default-cfg` in [`decoder.cpp`](decoder.cpp). You'll see some functions containing the default values.
 
 ## Future Direction
 - Address oversegmentation by merging regions
