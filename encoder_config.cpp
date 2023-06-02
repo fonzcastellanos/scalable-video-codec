@@ -16,37 +16,43 @@ Status ParseConfig(uint argc, char* argv[], Config* c) {
   /*******************************************************************************
    * Command-line Options    #options
    *******************************************************************************/
-  Option opts[] {
+  cli::Opt opts[] {
 #if !defined(__SSE2__) || !defined(SVC_MOTION_SSE2)
-    {"mv-block-w", kOptionTypeUInt, &ec->mv_block_w},
-        {"mv-block-h", kOptionTypeUInt, &ec->mv_block_h},
-        {"pyr-lvl-count", kOptionTypeUInt, &ec->pyr_lvl_count},
+    {"mv-block-w", cli::kOptArgType_Uint, &ec->mv_block_w},
+        {"mv-block-h", cli::kOptArgType_Uint, &ec->mv_block_h},
+        {"pyr-lvl-count", cli::kOptArgType_Uint, &ec->pyr_lvl_count},
 #endif
-        {"mv-search-range", kOptionTypeUInt, &ec->mv_search_range},
-        {"ransac-subset-sz", kOptionTypeUInt, &ec->ransac.subset_sz},
-        {"ransac-inlier-thresh", kOptionTypeFloat, &ec->ransac.inlier_thresh},
-        {"ransac-success-prob", kOptionTypeFloat, &ec->ransac.success_prob},
-        {"ransac-inlier-ratio", kOptionTypeFloat, &ec->ransac.inlier_ratio},
-        {"morph-rect-w", kOptionTypeUInt, &ec->morph_rect_w},
-        {"morph-rect-h", kOptionTypeUInt, &ec->morph_rect_h},
-        {"kmeans-cluster-count", kOptionTypeUInt, &ec->kmeans.cluster_count},
-        {"kmeans-attempt-count", kOptionTypeUInt, &ec->kmeans.attempt_count},
-        {"kmeans-max-iter-count", kOptionTypeUInt, &ec->kmeans.max_iter_count},
-        {"kmeans-epsilon", kOptionTypeFloat, &ec->kmeans.epsilon},
-        {"connected-components-connectivity", kOptionTypeUInt,
+        {"mv-search-range", cli::kOptArgType_Uint, &ec->mv_search_range},
+        {"ransac-subset-sz", cli::kOptArgType_Uint, &ec->ransac.subset_sz},
+        {"ransac-inlier-thresh", cli::kOptArgType_Float,
+         &ec->ransac.inlier_thresh},
+        {"ransac-success-prob", cli::kOptArgType_Float,
+         &ec->ransac.success_prob},
+        {"ransac-inlier-ratio", cli::kOptArgType_Float,
+         &ec->ransac.inlier_ratio},
+        {"morph-rect-w", cli::kOptArgType_Uint, &ec->morph_rect_w},
+        {"morph-rect-h", cli::kOptArgType_Uint, &ec->morph_rect_h},
+        {"kmeans-cluster-count", cli::kOptArgType_Uint,
+         &ec->kmeans.cluster_count},
+        {"kmeans-attempt-count", cli::kOptArgType_Uint,
+         &ec->kmeans.attempt_count},
+        {"kmeans-max-iter-count", cli::kOptArgType_Uint,
+         &ec->kmeans.max_iter_count},
+        {"kmeans-epsilon", cli::kOptArgType_Float, &ec->kmeans.epsilon},
+        {"connected-components-connectivity", cli::kOptArgType_Uint,
          &ec->connected_components_connectivity},
-        {"transform-block-w", kOptionTypeUInt, &ec->transform_block_w},
-        {"transform-block-h", kOptionTypeUInt, &ec->transform_block_h}, {
-      "verbose", kOptionTypeBoolean, &c->verbose
+        {"transform-block-w", cli::kOptArgType_Uint, &ec->transform_block_w},
+        {"transform-block-h", cli::kOptArgType_Uint, &ec->transform_block_h}, {
+      "verbose", cli::kOptArgType_Int, &c->verbose
     }
   };
 
   uint argi;
   uint opts_size = sizeof(opts) / sizeof(opts[0]);
 
-  CliStatus st = ParseOptions(argc, argv, opts_size, opts, &argi);
-  if (st != kCliStatusOk) {
-    std::fprintf(stderr, "parsing options: %s\n", CliStatusMessage(st));
+  cli::Status st = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
+  if (st != cli::kStatus_Ok) {
+    std::fprintf(stderr, "parsing options: %s\n", cli::StatusMessage(st));
     return res;
   }
 

@@ -3,69 +3,67 @@
 #include <cstdio>
 #include <cstring>
 
-// Returns 1 if `str` is prefixed by `prefix`. Otherwise, returns 0.
-static boolean HasPrefix(const char* str, const char* prefix) {
-  return std::strncmp(str, prefix, std::strlen(prefix)) == 0;
-}
+namespace cli {
 
-const char* CliStatusMessages[] = {
-    "success", "invalid option type", "missing option value",
-    "invalid option value", "unexpected option name"};
+const char* const kStatusMessages[] = {
+    "success", "invalid option argument type", "missing option argument",
+    "invalid option argument", "unexpected option name"};
 
-const char* CliStatusMessage(CliStatus cs) { return CliStatusMessages[cs]; }
+const char* StatusMessage(Status s) { return kStatusMessages[s]; }
 
-CliStatus ParseOptions(uint argc, char* argv[], uint opts_size, Option opts[],
-                       uint* argi) {
+Status ParseOpts(uint argc, char* argv[], Opt opts[], uint opts_size,
+                 uint* argi) {
   uint i = 1;
 
-  while (i < argc && HasPrefix(argv[i], "--")) {
+  while (i < argc && std::strncmp(argv[i], "--", 2) == 0) {
+    if (std::strcmp(argv[i], "--") == 0) {
+      ++i;
+      break;
+    }
+
+    if (i + 1 >= argc) {
+      *argi = i;
+      return kStatus_MissingOptArg;
+    }
+
     uint j = 0;
 
     while (j < opts_size && std::strcmp(&argv[i][2], opts[j].name) != 0) {
       ++j;
     }
-
     if (j == opts_size) {
       *argi = i;
-      return kCliStatusUnexpectedOptionName;
-    }
-
-    if (i + 1 >= argc) {
-      *argi = i;
-      return kCliStatusMissingOptionValue;
+      return kStatus_UnexpectedOptName;
     }
 
     const char* format;
-    switch (opts[j].type) {
-      case kOptionTypeBoolean:
-      case kOptionTypeInt: {
+    switch (opts[j].arg_type) {
+      case kOptArgType_Int: {
         format = "%d";
         break;
       }
-      case kOptionTypeUInt: {
+      case kOptArgType_Uint: {
         format = "%u";
         break;
       }
-      case kOptionTypeFloat: {
+      case kOptArgType_Float: {
         format = "%f";
+        break;
+      }
+      case kOptArgType_String: {
+        format = "%s";
         break;
       }
       default: {
         *argi = i;
-        return kCliStatusInvalidOptionType;
+        return kStatus_InvalidOptArgType;
       }
     }
 
-    int ret = std::sscanf(argv[i + 1], format, opts[j].val);
-    if (ret != 1) {
+    int rc = std::sscanf(argv[i + 1], format, opts[j].arg);
+    if (rc != 1) {
       *argi = i;
-      return kCliStatusInvalidOptionValue;
-    }
-    if (opts[j].type == kOptionTypeBoolean) {
-      if (*(boolean*)opts[j].val > 1) {
-        *argi = i;
-        return kCliStatusInvalidOptionValue;
-      }
+      return kStatus_InvalidOptArg;
     }
 
     i += 2;
@@ -73,5 +71,6 @@ CliStatus ParseOptions(uint argc, char* argv[], uint opts_size, Option opts[],
 
   *argi = i;
 
-  return kCliStatusOk;
+  return kStatus_Ok;
 }
+}  // namespace cli

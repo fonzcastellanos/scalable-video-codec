@@ -14,18 +14,20 @@ Status ParseConfig(int argc, char* argv[], Config* c) {
   /*******************************************************************************
    * Command-line Options    #options
    *******************************************************************************/
-  Option opts[]{
-      {"foreground-quant-step", kOptionTypeUInt, &c->foreground_quant_step},
-      {"background-quant-step", kOptionTypeUInt, &c->background_quant_step},
-      {"max-gaze-rect-w", kOptionTypeUInt, &c->max_gaze_rect_w},
-      {"max-gaze-rect-h", kOptionTypeUInt, &c->max_gaze_rect_h}};
+  cli::Opt opts[]{
+      {"foreground-quant-step", cli::kOptArgType_Uint,
+       &c->foreground_quant_step},
+      {"background-quant-step", cli::kOptArgType_Uint,
+       &c->background_quant_step},
+      {"max-gaze-rect-w", cli::kOptArgType_Uint, &c->max_gaze_rect_w},
+      {"max-gaze-rect-h", cli::kOptArgType_Uint, &c->max_gaze_rect_h}};
 
   uint argi;
   uint opts_size = sizeof(opts) / sizeof(opts[0]);
 
-  CliStatus st = ParseOptions(argc, argv, opts_size, opts, &argi);
-  if (st != kCliStatusOk) {
-    std::fprintf(stderr, "parsing options: %s\n", CliStatusMessage(st));
+  cli::Status st = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
+  if (st != cli::kStatus_Ok) {
+    std::fprintf(stderr, "parsing options: %s\n", cli::StatusMessage(st));
     return status;
   }
 

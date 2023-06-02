@@ -1,32 +1,34 @@
-#ifndef SCALABLE_VIDEO_CODEC_CLI_HPP
-#define SCALABLE_VIDEO_CODEC_CLI_HPP
+#ifndef CLI_HPP
+#define CLI_HPP
 
-#include "types.hpp"
+#define CLI_OPT_NAME_BUFFER_SIZE 64
 
-enum OptionType {
-  kOptionTypeInt,
-  kOptionTypeUInt,
-  kOptionTypeBoolean,
-  kOptionTypeFloat
+namespace cli {
+
+typedef unsigned int uint;
+
+enum OptArgType {
+  kOptArgType_Int,
+  kOptArgType_Uint,
+  kOptArgType_Float,
+  kOptArgType_String
 };
 
-#define OPTION_NAME_BUF_SZ 64
-
-struct Option {
-  char name[OPTION_NAME_BUF_SZ];
-  OptionType type;
-  void* val;
+struct Opt {
+  char name[CLI_OPT_NAME_BUFFER_SIZE];
+  OptArgType arg_type;
+  void *arg;
 };
 
-enum CliStatus {
-  kCliStatusOk,
-  kCliStatusInvalidOptionType,
-  kCliStatusMissingOptionValue,
-  kCliStatusInvalidOptionValue,
-  kCliStatusUnexpectedOptionName,
+enum Status {
+  kStatus_Ok,
+  kStatus_InvalidOptArgType,
+  kStatus_MissingOptArg,
+  kStatus_InvalidOptArg,
+  kStatus_UnexpectedOptName,
 };
 
-const char* CliStatusMessage(CliStatus cs);
+const char *StatusMessage(Status s);
 
 /*
 Parses options from arguments passed to the program.
@@ -50,7 +52,8 @@ Output Parameters:
 - argi: argument index that is one past that of the last option successfully
 parsed. cannot be null
 */
-CliStatus ParseOptions(uint argc, char* argv[], uint opts_size, Option opts[],
-                       uint* argi);
+Status ParseOpts(uint argc, char *argv[], Opt opts[], uint opts_size,
+                 uint *argi);
+}  // namespace cli
 
-#endif  // SCALABLE_VIDEO_CODEC_CLI_HPP
+#endif  // CLI_HPP
