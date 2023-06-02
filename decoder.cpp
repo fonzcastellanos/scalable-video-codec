@@ -23,19 +23,15 @@ void DefaultInit(DecoderConfig* c) {
 Status Validate(DecoderConfig* c) {
   assert(c);
 
-  Status status = kStatus_InvalidParamError;
-
   if (c->foreground_quant_step == 0) {
-    std::fprintf(stderr, "foreground quantization step must be > 0\n");
-    return status;
+    std::fprintf(stderr, "Foreground quantization step must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (c->background_quant_step == 0) {
-    std::fprintf(stderr, "background quantization step must be > 0\n");
-    return status;
+    std::fprintf(stderr, "Background quantization step must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
-  status = kStatus_Ok;
-
-  return status;
+  return kStatus_Ok;
 }

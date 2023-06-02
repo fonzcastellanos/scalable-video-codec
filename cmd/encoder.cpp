@@ -36,8 +36,6 @@ static Status ParseConfig(uint argc, char* argv[], Config* c) {
 
   EncoderConfig* ec = &c->encoder;
 
-  Status res = kStatus_InvalidParamError;
-
   /*******************************************************************************
    * Command-line Options    #options
    *******************************************************************************/
@@ -75,22 +73,21 @@ static Status ParseConfig(uint argc, char* argv[], Config* c) {
   uint argi;
   uint opts_size = sizeof(opts) / sizeof(opts[0]);
 
-  cli::Status st = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
-  if (st != cli::kStatus_Ok) {
-    std::fprintf(stderr, "parsing options: %s\n", cli::StatusMessage(st));
-    return res;
+  cli::Status status = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
+  if (status != cli::kStatus_Ok) {
+    std::fprintf(stderr, "Failed to parse options: %s.\n",
+                 cli::StatusMessage(status));
+    return kStatus_InvalidParamError;
   }
 
   if (argc < argi + 1) {
-    std::fprintf(stderr, "missing video path argument\n");
-    return res;
+    std::fprintf(stderr, "Missing video path argument.\n");
+    return kStatus_InvalidParamError;
   }
 
   c->video_path = argv[argi];
 
-  res = kStatus_Ok;
-
-  return res;
+  return kStatus_Ok;
 }
 
 static void BuildMvFeatures(const Vec2f* mv_field, uint mv_field_w,
@@ -99,8 +96,8 @@ static void BuildMvFeatures(const Vec2f* mv_field, uint mv_field_w,
                             uint mv_field_indices_sz, Vec4f* features) {
   assert(mv_field);
   assert(features);
-
   assert(mv_field_w > 0);
+  assert(mv_field_indices_sz == 0 || mv_field_indices);
 
   for (uint i = 0; i < mv_field_indices_sz; ++i) {
     uint mf_i = mv_field_indices[i];
@@ -192,7 +189,7 @@ static Status WriteEncodedFrame(const std::vector<cv::Mat1f>* dct_coeffs,
 
       uint count = std::fwrite(&btype, sizeof(btype), 1, stdout);
       if (count < 1) {
-        std::fprintf(stderr, "failed to write block type\n");
+        std::fprintf(stderr, "Failed to write block type.\n");
         return res;
       }
 
@@ -205,7 +202,7 @@ static Status WriteEncodedFrame(const std::vector<cv::Mat1f>* dct_coeffs,
           uint count =
               std::fwrite(row, sizeof(float), transform_block_h, stdout);
           if (count < transform_block_h) {
-            std::fprintf(stderr, "failed to write DCT coefficients\n");
+            std::fprintf(stderr, "Failed to write DCT coefficients.\n");
             return res;
           }
         }
@@ -250,14 +247,14 @@ int main(int argc, char* argv[]) {
 
   Status status = ParseConfig(argc, argv, &cfg);
   if (status != kStatus_Ok) {
-    std::fprintf(stderr, "failed to parse configuration\n");
+    std::fprintf(stderr, "Failed to parse configuration.\n");
     return EXIT_FAILURE;
   }
 
   cv::VideoCapture vidcap(cfg.video_path);
 
   if (!vidcap.isOpened()) {
-    std::fprintf(stderr, "failed to initialize video capturing\n");
+    std::fprintf(stderr, "Failed to initialize video capturing.\n");
     return EXIT_FAILURE;
   }
 
@@ -268,7 +265,7 @@ int main(int argc, char* argv[]) {
 
   status = Validate(&cfg.encoder);
   if (status != kStatus_Ok) {
-    std::fprintf(stderr, "failed to validate configuration\n");
+    std::fprintf(stderr, "Failed to validate configuration.\n");
     return EXIT_FAILURE;
   }
 
@@ -276,16 +273,16 @@ int main(int argc, char* argv[]) {
       vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_COUNT);
 
   if (cfg.verbose) {
-    std::fprintf(stderr, "video properties:\n");
-    std::fprintf(stderr, "  width: %u\n", cfg.encoder.frame_w);
-    std::fprintf(stderr, "  height: %u\n", cfg.encoder.frame_h);
-    std::fprintf(stderr, "  frame count: %u\n", frame_count);
+    std::fprintf(stderr, "Video properties:\n");
+    std::fprintf(stderr, "  Width: %u\n", cfg.encoder.frame_w);
+    std::fprintf(stderr, "  Height: %u\n", cfg.encoder.frame_h);
+    std::fprintf(stderr, "  Frame count: %u\n", frame_count);
   }
 
   cv::Mat3b frame;
 
   if (!vidcap.read(frame)) {
-    std::fprintf(stderr, "no frames in video file\n");
+    std::fprintf(stderr, "No frames in video file.\n");
     return EXIT_SUCCESS;
   }
 
@@ -323,7 +320,7 @@ int main(int argc, char* argv[]) {
 
     uint count = std::fwrite(&header, sizeof(header), 1, stdout);
     if (count < 1) {
-      std::fprintf(stderr, "failed to write header\n");
+      std::fprintf(stderr, "Failed to write header.\n");
       return EXIT_FAILURE;
     }
   }
@@ -589,7 +586,7 @@ int main(int argc, char* argv[]) {
         enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
         enc.cfg.mv_block_w, enc.cfg.mv_block_h);
     if (status != kStatus_Ok) {
-      std::fprintf(stderr, "failed to write encoded frame\n");
+      std::fprintf(stderr, "Failed to write encoded frame.\n");
       return EXIT_FAILURE;
     }
 #endif  // NOT VISUALIZE

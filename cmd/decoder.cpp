@@ -29,11 +29,9 @@ struct SharedVec2 {
   std::shared_mutex mutex;
 };
 
-Status ParseConfig(int argc, char* argv[], DecoderConfig* c) {
+Status ParseConfig(uint argc, char* argv[], DecoderConfig* c) {
   assert(argv);
   assert(c);
-
-  Status status = kStatus_InvalidParamError;
 
   /*******************************************************************************
    * Command-line Options    #options
@@ -49,15 +47,14 @@ Status ParseConfig(int argc, char* argv[], DecoderConfig* c) {
   uint argi;
   uint opts_size = sizeof(opts) / sizeof(opts[0]);
 
-  cli::Status st = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
-  if (st != cli::kStatus_Ok) {
-    std::fprintf(stderr, "parsing options: %s\n", cli::StatusMessage(st));
-    return status;
+  cli::Status status = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
+  if (status != cli::kStatus_Ok) {
+    std::fprintf(stderr, "Failed to parse options: %s.\n",
+                 cli::StatusMessage(status));
+    return kStatus_InvalidParamError;
   }
 
-  status = kStatus_Ok;
-
-  return status;
+  return kStatus_Ok;
 }
 
 static Status ReadBlock(uint channel_count, uint block_w, uint block_h,
@@ -66,7 +63,7 @@ static Status ReadBlock(uint channel_count, uint block_w, uint block_h,
 
   uint count = std::fread(&block->type, sizeof(block->type), 1, stdin);
   if (count < 1) {
-    std::fprintf(stderr, "failed to read block type\n");
+    std::fprintf(stderr, "Failed to read block type.\n");
     return kStatus_IoError;
   }
 
@@ -79,7 +76,7 @@ static Status ReadBlock(uint channel_count, uint block_w, uint block_h,
     ch = cv::Mat1f(block_h, block_w);
     uint count = std::fread(ch.data, sizeof(float), block_area, stdin);
     if (count < block_area) {
-      std::fprintf(stderr, "failed to read dct coefficients\n");
+      std::fprintf(stderr, "Failed to read DCT coefficients.\n");
       return kStatus_IoError;
     }
   }
@@ -96,7 +93,7 @@ static Status DecodeBlock(uint num_channels, uint block_w, uint block_h,
 
   Status status = ReadBlock(num_channels, block_w, block_h, &block);
   if (status != kStatus_Ok) {
-    std::fprintf(stderr, "failed to read block\n");
+    std::fprintf(stderr, "Failed to read block.\n");
     return kStatus_IoError;
   }
 
@@ -138,7 +135,7 @@ static Status DecodeFrame(uint channel_count, uint frame_w, uint frame_h,
       Status status = DecodeBlock(channel_count, block_w, block_h, gazed,
                                   fg_quant_step, bg_quant_step, &decoded_block);
       if (status != kStatus_Ok) {
-        std::fprintf(stderr, "failed to decode block\n");
+        std::fprintf(stderr, "Failed to decode block.\n");
         return kStatus_UnspecifiedError;
       }
     }
@@ -207,13 +204,13 @@ int main(int argc, char* argv[]) {
 
   Status status = ParseConfig(argc, argv, &cfg);
   if (status != kStatus_Ok) {
-    std::fprintf(stderr, "failed to parse config\n");
+    std::fprintf(stderr, "Failed to parse config.\n");
     return EXIT_FAILURE;
   }
 
   status = Validate(&cfg);
   if (status != kStatus_Ok) {
-    std::fprintf(stderr, "failed to validate config\n");
+    std::fprintf(stderr, "Failed to validate config.\n");
     return EXIT_FAILURE;
   }
 
@@ -221,7 +218,7 @@ int main(int argc, char* argv[]) {
 
   uint count = std::fread(&header, sizeof(header), 1, stdin);
   if (count == 0) {
-    std::fprintf(stderr, "failed to read header\n");
+    std::fprintf(stderr, "Failed to read header.\n");
     return EXIT_FAILURE;
   }
 
@@ -263,7 +260,7 @@ int main(int argc, char* argv[]) {
                          header.transform_block_h, cfg.foreground_quant_step,
                          cfg.background_quant_step, gaze_rect, &upscaled_frame);
     if (status != kStatus_Ok) {
-      std::fprintf(stderr, "failed to decode frame\n");
+      std::fprintf(stderr, "Failed to decode frame.\n");
       return EXIT_FAILURE;
     }
 

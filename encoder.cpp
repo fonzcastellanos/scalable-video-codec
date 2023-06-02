@@ -20,9 +20,9 @@ void DefaultInit(RansacParams* p) {
   assert(p);
 
   p->subset_sz = 1;
-  p->inlier_ratio = 0.5f;
-  p->success_prob = 0.99f;
-  p->inlier_thresh = 7.5f;
+  p->inlier_ratio = 0.5;
+  p->success_prob = 0.99;
+  p->inlier_thresh = 7.5;
 }
 
 void DefaultInit(EncoderConfig* c) {
@@ -52,115 +52,103 @@ void DefaultInit(EncoderConfig* c) {
 Status Validate(KMeansParams* p) {
   assert(p);
 
-  Status res = kStatus_InvalidParamError;
-
   if (p->cluster_count == 0) {
-    std::fprintf(stderr, "number of clusters must be > 0\n");
-    return res;
+    std::fprintf(stderr, "Cluster count must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (p->attempt_count == 0) {
-    std::fprintf(stderr, "number of attempts must be > 0\n");
-    return res;
+    std::fprintf(stderr, "Attempt count must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (p->max_iter_count == 0) {
-    std::fprintf(stderr, "maximum number of iterations > 0\n");
-    return res;
+    std::fprintf(stderr, "Maximum iteration count must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (p->epsilon <= 0) {
-    std::fprintf(stderr, "epsilon must be > 0\n");
-    return res;
+    std::fprintf(stderr, "Epsilon must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
-  res = kStatus_Ok;
-
-  return res;
+  return kStatus_Ok;
 }
 
 Status Validate(RansacParams* p) {
   assert(p);
 
-  Status res = kStatus_InvalidParamError;
-
   if (p->inlier_thresh < 0) {
-    std::fprintf(stderr, "inlier threshold must be >= 0");
-    return res;
+    std::fprintf(stderr, "Inlier threshold must be >= 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (p->success_prob < 0) {
-    std::fprintf(stderr, "success probability must be >= 0");
-    return res;
+    std::fprintf(stderr, "Success probability must be >= 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (p->inlier_ratio < 0) {
-    std::fprintf(stderr, "inlier ratio must be >= 0");
-    return res;
+    std::fprintf(stderr, "Inlier ratio is >= 0.\n");
+    return kStatus_InvalidParamError;
   }
 
-  res = kStatus_Ok;
-
-  return res;
+  return kStatus_Ok;
 }
 
 Status Validate(EncoderConfig* c) {
   assert(c);
 
-  Status status = kStatus_InvalidParamError;
-
   if (c->mv_block_w < 1) {
-    std::fprintf(stderr, "MV block width must be > 0\n");
-    return status;
+    std::fprintf(stderr, "MV block width must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (c->mv_block_h < 1) {
-    std::fprintf(stderr, "MV block height must be > 0\n");
-    return status;
+    std::fprintf(stderr, "MV block height must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (c->pyr_lvl_count < 1) {
-    std::fprintf(stderr, "number of pyramid levels must be > 0\n");
-    return status;
+    std::fprintf(stderr, "Pyramid level count must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   uint top_lvl_reduction_factor = Pow2(c->pyr_lvl_count - 1);
   if (c->mv_search_range / top_lvl_reduction_factor == 0) {
     std::fprintf(stderr,
-                 "the quotient from dividing the MV search range by the "
-                 "top pyramid level reduction factor must be > 0\n");
-    return status;
+                 "The quotient from dividing the MV search range by the "
+                 "top pyramid level reduction factor must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
-  status = Validate(&c->ransac);
+  Status status = Validate(&c->ransac);
   if (status != kStatus_Ok) {
-    std::fprintf(stderr, "failed to validate RANSAC parameters\n");
+    std::fprintf(stderr, "Failed to validate RANSAC parameters.\n");
     return status;
   }
 
   status = Validate(&c->kmeans);
   if (status != kStatus_Ok) {
-    std::fprintf(stderr, "failed to validate k-means parameters\n");
+    std::fprintf(stderr, "Failed to validate k-means parameters.\n");
     return status;
   }
-
-  status = kStatus_InvalidParamError;
 
   if (c->connected_components_connectivity != 4 &&
       c->connected_components_connectivity != 8) {
     std::fprintf(stderr,
-                 "connected components connectivity must be either 4 or 8\n");
-    return status;
+                 "Connected components connectivity must be either 4 or 8.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (c->transform_block_w < 1) {
-    std::fprintf(stderr, "transform block width must be > 0\n");
-    return status;
+    std::fprintf(stderr, "Transform block width must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   if (c->transform_block_h < 1) {
-    std::fprintf(stderr, "transform block height must be > 0\n");
-    return status;
+    std::fprintf(stderr, "Transform block height must be > 0.\n");
+    return kStatus_InvalidParamError;
   }
 
   // IF the width and height of transform blocks are greater than the width
@@ -170,31 +158,27 @@ Status Validate(EncoderConfig* c) {
   // transform blocks would be ambiguous because a transform block would
   // overlap with multiple motion blocks.
   if (c->transform_block_w > c->mv_block_w) {
-    std::fprintf(stderr,
-                 "transform block width must be <= motion block width\n");
-    return status;
+    std::fprintf(stderr, "Transform block width must be <= MV block width.\n");
+    return kStatus_InvalidParamError;
   }
   if (c->transform_block_h > c->mv_block_h) {
     std::fprintf(stderr,
-                 "transform block height must be <= motion block height\n");
-    return status;
+                 "Transform block height must be <= MV block height.\n");
+    return kStatus_InvalidParamError;
   }
   if (c->mv_block_w % c->transform_block_w != 0) {
     std::fprintf(
-        stderr,
-        "motion block width must be divisible by transform block width\n");
-    return status;
+        stderr, "MV block width must be divisible by transform block width.\n");
+    return kStatus_InvalidParamError;
   }
   if (c->mv_block_h % c->transform_block_h != 0) {
     std::fprintf(
         stderr,
-        "motion block height must be divisible by transform block height\n");
-    return status;
+        "MV block height must be divisible by transform block height.\n");
+    return kStatus_InvalidParamError;
   }
 
-  status = kStatus_Ok;
-
-  return status;
+  return kStatus_Ok;
 }
 
 void Init(Encoder* e, EncoderConfig* cfg) {
