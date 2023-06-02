@@ -87,16 +87,15 @@ https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/04843ce0-
 ## Build Requirements
 - C++ compiler
     - Must support at least C++17
-    - I used Clang (version 10.0.01)
 - CMake >= 3.2
-    - I used 3.25.1
 - OpenCV == 3.4.*
-    - I used 3.4.16
 
 I have not built the project on other platforms besides the one used for my development environment:
-
 - Hardware: MacBook Pro (Retina, 13-inch, Early 2015)
 - Operating System: macOS Mojave (version 10.14.16)
+- C++ compiler: Clang == 10.0.01
+- CMake == 3.25.1
+- OpenCV == 3.4.16
 
 However, there is a good chance that the project can be built on your platform without much hassle because I use CMake to generate the build system. CMake is best known for taking a generic project description (see file [`CMakeLists.txt`](CMakeLists.txt)) and generating a platform-specific build system. 
 
