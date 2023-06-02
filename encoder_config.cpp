@@ -5,13 +5,13 @@
 
 #include "cli.hpp"
 
-CodecStatus ParseConfig(uint argc, char* argv[], Config* c) {
+Status ParseConfig(uint argc, char* argv[], Config* c) {
   assert(argv);
   assert(c);
 
   EncoderConfig* ec = &c->encoder;
 
-  CodecStatus res = kCodecStatusInvalidParamError;
+  Status res = kStatus_InvalidParamError;
 
   /*******************************************************************************
    * Command-line Options    #options
@@ -57,7 +57,7 @@ CodecStatus ParseConfig(uint argc, char* argv[], Config* c) {
 
   c->video_path = argv[argi];
 
-  res = kCodecStatusOk;
+  res = kStatus_Ok;
 
   return res;
 }
@@ -117,10 +117,10 @@ void DefaultInit(Config* c) {
  * Config Validation Functions    #cfg-validation
  *******************************************************************************/
 
-CodecStatus Validate(KMeansParams* p) {
+Status Validate(KMeansParams* p) {
   assert(p);
 
-  CodecStatus res = kCodecStatusInvalidParamError;
+  Status res = kStatus_InvalidParamError;
 
   if (p->cluster_count == 0) {
     std::fprintf(stderr, "number of clusters must be > 0\n");
@@ -142,15 +142,15 @@ CodecStatus Validate(KMeansParams* p) {
     return res;
   }
 
-  res = kCodecStatusOk;
+  res = kStatus_Ok;
 
   return res;
 }
 
-CodecStatus Validate(RansacParams* p) {
+Status Validate(RansacParams* p) {
   assert(p);
 
-  CodecStatus res = kCodecStatusInvalidParamError;
+  Status res = kStatus_InvalidParamError;
 
   if (p->inlier_thresh < 0) {
     std::fprintf(stderr, "inlier threshold must be >= 0");
@@ -167,15 +167,15 @@ CodecStatus Validate(RansacParams* p) {
     return res;
   }
 
-  res = kCodecStatusOk;
+  res = kStatus_Ok;
 
   return res;
 }
 
-CodecStatus Validate(EncoderConfig* c) {
+Status Validate(EncoderConfig* c) {
   assert(c);
 
-  CodecStatus status = kCodecStatusInvalidParamError;
+  Status status = kStatus_InvalidParamError;
 
   if (c->mv_block_w < 1) {
     std::fprintf(stderr, "MV block width must be > 0\n");
@@ -201,18 +201,18 @@ CodecStatus Validate(EncoderConfig* c) {
   }
 
   status = Validate(&c->ransac);
-  if (status != kCodecStatusOk) {
+  if (status != kStatus_Ok) {
     std::fprintf(stderr, "failed to validate RANSAC parameters\n");
     return status;
   }
 
   status = Validate(&c->kmeans);
-  if (status != kCodecStatusOk) {
+  if (status != kStatus_Ok) {
     std::fprintf(stderr, "failed to validate k-means parameters\n");
     return status;
   }
 
-  status = kCodecStatusInvalidParamError;
+  status = kStatus_InvalidParamError;
 
   if (c->connected_components_connectivity != 4 &&
       c->connected_components_connectivity != 8) {
@@ -260,7 +260,7 @@ CodecStatus Validate(EncoderConfig* c) {
     return status;
   }
 
-  status = kCodecStatusOk;
+  status = kStatus_Ok;
 
   return status;
 }

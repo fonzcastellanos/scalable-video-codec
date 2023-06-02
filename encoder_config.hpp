@@ -34,15 +34,15 @@ struct Config {
   EncoderConfig encoder;
 };
 
-CodecStatus ParseConfig(uint argc, char* argv[], Config* c);
+Status ParseConfig(uint argc, char* argv[], Config* c);
 
 void DefaultInit(KMeansParams* p);
 void DefaultInit(RansacParams* p);
 void DefaultInit(EncoderConfig* c);
 void DefaultInit(Config* c);
 
-CodecStatus Validate(KMeansParams* p);
-CodecStatus Validate(EncoderConfig* c);
-CodecStatus Validate(EncoderConfig* c);
+Status Validate(KMeansParams* p);
+Status Validate(EncoderConfig* c);
+Status Validate(EncoderConfig* c);
 
 #endif  // SCALABLE_VIDEO_CODEC_ENCODER_CONFIG_HPP

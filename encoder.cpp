@@ -178,7 +178,7 @@ static void Dct(const cv::Mat3f* frame, uint block_w, uint block_h,
   }
 }
 
-static CodecStatus WriteEncodedFrame(
+static Status WriteEncodedFrame(
     const std::vector<cv::Mat1f>* dct_coeffs,
     const std::vector<uint>* mv_field_block_types, uint frame_w, uint frame_h,
     uint transform_block_w, uint transform_block_h, uint mv_field_w,
@@ -200,7 +200,7 @@ static CodecStatus WriteEncodedFrame(
   assert(mv_block_h % transform_block_w == 0);
   assert(mv_block_w % transform_block_h == 0);
 
-  CodecStatus res = kCodecStatusIOError;
+  Status res = kStatus_IoError;
 
   for (uint tb_y = 0; tb_y < frame_h; tb_y += transform_block_w) {
     for (uint tb_x = 0; tb_x < frame_w; tb_x += transform_block_h) {
@@ -233,7 +233,7 @@ static CodecStatus WriteEncodedFrame(
     }
   }
 
-  res = kCodecStatusOk;
+  res = kStatus_Ok;
 
   return res;
 }
@@ -268,8 +268,8 @@ int main(int argc, char* argv[]) {
   Config cfg;
   DefaultInit(&cfg);
 
-  CodecStatus status = ParseConfig(argc, argv, &cfg);
-  if (status != kCodecStatusOk) {
+  Status status = ParseConfig(argc, argv, &cfg);
+  if (status != kStatus_Ok) {
     std::fprintf(stderr, "failed to parse configuration\n");
     return EXIT_FAILURE;
   }
@@ -287,7 +287,7 @@ int main(int argc, char* argv[]) {
       vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_HEIGHT);
 
   status = Validate(&cfg.encoder);
-  if (status != kCodecStatusOk) {
+  if (status != kStatus_Ok) {
     std::fprintf(stderr, "failed to validate configuration\n");
     return EXIT_FAILURE;
   }
@@ -608,7 +608,7 @@ int main(int argc, char* argv[]) {
         enc.padded_frame_h, enc.cfg.transform_block_w,
         enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
         enc.cfg.mv_block_w, enc.cfg.mv_block_h);
-    if (status != kCodecStatusOk) {
+    if (status != kStatus_Ok) {
       std::fprintf(stderr, "failed to write encoded frame\n");
       return EXIT_FAILURE;
     }

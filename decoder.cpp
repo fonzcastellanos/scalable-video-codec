@@ -21,14 +21,14 @@ struct Block {
   std::vector<cv::Mat1f> channels;
 };
 
-static CodecStatus ReadBlock(uint channel_count, uint block_w, uint block_h,
+static Status ReadBlock(uint channel_count, uint block_w, uint block_h,
                              Block* block) {
   assert(block);
 
   uint count = std::fread(&block->type, sizeof(block->type), 1, stdin);
   if (count < 1) {
     std::fprintf(stderr, "failed to read block type\n");
-    return kCodecStatusIOError;
+    return kStatus_IoError;
   }
 
   block->channels.resize(channel_count);
@@ -41,24 +41,24 @@ static CodecStatus ReadBlock(uint channel_count, uint block_w, uint block_h,
     uint count = std::fread(ch.data, sizeof(float), block_area, stdin);
     if (count < block_area) {
       std::fprintf(stderr, "failed to read dct coefficients\n");
-      return kCodecStatusIOError;
+      return kStatus_IoError;
     }
   }
 
-  return kCodecStatusOk;
+  return kStatus_Ok;
 }
 
-static CodecStatus DecodeBlock(uint num_channels, uint block_w, uint block_h,
+static Status DecodeBlock(uint num_channels, uint block_w, uint block_h,
                                boolean gazed, uint fg_quant_step,
                                uint bg_quant_step, cv::Mat3f* decoded_block) {
   assert(decoded_block);
 
   Block block;
 
-  CodecStatus status = ReadBlock(num_channels, block_w, block_h, &block);
-  if (status != kCodecStatusOk) {
+  Status status = ReadBlock(num_channels, block_w, block_h, &block);
+  if (status != kStatus_Ok) {
     std::fprintf(stderr, "failed to read block\n");
-    return kCodecStatusIOError;
+    return kStatus_IoError;
   }
 
   uint quant_step = fg_quant_step;
@@ -80,10 +80,10 @@ static CodecStatus DecodeBlock(uint num_channels, uint block_w, uint block_h,
 
   cv::merge(block.channels, *decoded_block);
 
-  return kCodecStatusOk;
+  return kStatus_Ok;
 }
 
-static CodecStatus DecodeFrame(uint channel_count, uint frame_w, uint frame_h,
+static Status DecodeFrame(uint channel_count, uint frame_w, uint frame_h,
                                uint block_w, uint block_h, uint fg_quant_step,
                                uint bg_quant_step, cv::Rect2i gaze_region,
                                cv::Mat3f* decoded_frame) {
@@ -96,17 +96,17 @@ static CodecStatus DecodeFrame(uint channel_count, uint frame_w, uint frame_h,
 
       boolean gazed = gaze_region.contains(cv::Point2i(x, y));
 
-      CodecStatus status =
+      Status status =
           DecodeBlock(channel_count, block_w, block_h, gazed, fg_quant_step,
                       bg_quant_step, &decoded_block);
-      if (status != kCodecStatusOk) {
+      if (status != kStatus_Ok) {
         std::fprintf(stderr, "failed to decode block\n");
-        return kCodecStatusUnspecifiedError;
+        return kStatus_UnspecifiedError;
       }
     }
   }
 
-  return kCodecStatusOk;
+  return kStatus_Ok;
 }
 
 static cv::Rect2i CalcWithinFrameRectFromCenter(cv::Point2i center,
@@ -173,14 +173,14 @@ int main(int argc, char* argv[]) {
   Config cfg;
   DefaultInit(&cfg);
 
-  CodecStatus status = ParseConfig(argc, argv, &cfg);
-  if (status != kCodecStatusOk) {
+  Status status = ParseConfig(argc, argv, &cfg);
+  if (status != kStatus_Ok) {
     std::fprintf(stderr, "failed to parse config\n");
     return EXIT_FAILURE;
   }
 
   status = Validate(&cfg);
-  if (status != kCodecStatusOk) {
+  if (status != kStatus_Ok) {
     std::fprintf(stderr, "failed to validate config\n");
     return EXIT_FAILURE;
   }
@@ -230,7 +230,7 @@ int main(int argc, char* argv[]) {
                          upscaled_frame_h, header.transform_block_w,
                          header.transform_block_h, cfg.foreground_quant_step,
                          cfg.background_quant_step, gaze_rect, &upscaled_frame);
-    if (status != kCodecStatusOk) {
+    if (status != kStatus_Ok) {
       std::fprintf(stderr, "failed to decode frame\n");
       return EXIT_FAILURE;
     }

@@ -11,10 +11,10 @@ struct Config {
   uint max_gaze_rect_h;
 };
 
-CodecStatus ParseConfig(int argc, char* argv[], Config* c);
+Status ParseConfig(int argc, char* argv[], Config* c);
 
 void DefaultInit(Config* c);
 
-CodecStatus Validate(Config* c);
+Status Validate(Config* c);
 
 #endif  // SCALABLE_VIDEO_CODEC_DECODER_CONFIG_HPP

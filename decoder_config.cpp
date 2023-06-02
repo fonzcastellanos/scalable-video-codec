@@ -5,11 +5,11 @@
 
 #include "cli.hpp"
 
-CodecStatus ParseConfig(int argc, char* argv[], Config* c) {
+Status ParseConfig(int argc, char* argv[], Config* c) {
   assert(argv);
   assert(c);
 
-  CodecStatus status = kCodecStatusInvalidParamError;
+  Status status = kStatus_InvalidParamError;
 
   /*******************************************************************************
    * Command-line Options    #options
@@ -29,7 +29,7 @@ CodecStatus ParseConfig(int argc, char* argv[], Config* c) {
     return status;
   }
 
-  status = kCodecStatusOk;
+  status = kStatus_Ok;
 
   return status;
 }
@@ -51,10 +51,10 @@ void DefaultInit(Config* c) {
  * Config Validation Functions    #cfg-validation
  *******************************************************************************/
 
-CodecStatus Validate(Config* c) {
+Status Validate(Config* c) {
   assert(c);
 
-  CodecStatus status = kCodecStatusInvalidParamError;
+  Status status = kStatus_InvalidParamError;
 
   if (c->foreground_quant_step == 0) {
     std::fprintf(stderr, "foreground quantization step must be > 0\n");
@@ -66,7 +66,7 @@ CodecStatus Validate(Config* c) {
     return status;
   }
 
-  status = kCodecStatusOk;
+  status = kStatus_Ok;
 
   return status;
 }

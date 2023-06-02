@@ -5,11 +5,11 @@
 
 #define BLOCK_TYPE_BACKGROUND 0
 
-enum CodecStatus {
-  kCodecStatusOk,
-  kCodecStatusUnspecifiedError,
-  kCodecStatusInvalidParamError,
-  kCodecStatusIOError
+enum Status {
+  kStatus_Ok,
+  kStatus_UnspecifiedError,
+  kStatus_InvalidParamError,
+  kStatus_IoError
 };
 
 struct Header {
