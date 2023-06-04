@@ -4,7 +4,7 @@
 
 ## Overview
 
-This project is an exploration of scalable video coding based on content (i.e. physical objects) and point of gaze (i.e. where a viewer is looking). Scalability, in this context, is the ability to reconstruct meaningful video information from partial decompressed streams, thereby helping video systems meet their client device processing power and network bandwidth requirements.
+This project is an exploration of video coding that scales based on content (i.e. physical objects) and point of gaze (i.e. where a viewer is looking). Scalability, in this context, is the ability to reconstruct meaningful video information from partial decompressed streams, thereby helping video systems meet their client device processing power and network bandwidth requirements.
 
 The encoder first performs block-based motion estimation and then segments the video into regions, which are sets of spatially-connected blocks with similar motion. Each region represents either the background or a distinct moving (i.e. foreground) object. Afterwards, the encoder applies the Discrete Cosine Transform (DCT) and the resulting coefficients and identifier of each region are written to a file.
 
