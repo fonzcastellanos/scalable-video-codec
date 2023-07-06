@@ -4,7 +4,6 @@
 #include <opencv2/core/mat.hpp>
 #include <vector>
 
-#include "codec.hpp"
 #include "math.hpp"
 #include "motion.hpp"
 #include "types.hpp"
@@ -60,14 +59,10 @@ struct Encoder {
   std::vector<uchar*> pyr_data;
 };
 
-void DefaultInit(KMeansParams*);
-void DefaultInit(RansacParams*);
-void DefaultInit(EncoderConfig*);
-
-Status Validate(KMeansParams*);
-Status Validate(RansacParams*);
-Status Validate(EncoderConfig*);
-
-void InitEncoder(Encoder*, EncoderConfig*);
+struct Config {
+  char* video_path;
+  boolean verbose;
+  EncoderConfig encoder;
+};
 
 #endif  // SCALABLE_VIDEO_CODEC_ENCODER_HPP

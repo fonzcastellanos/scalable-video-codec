@@ -165,7 +165,7 @@ To run `encoder-visualizer` with the default configuration, execute the followin
 
 `encoder` and `encoder-visualizer` have the same options.
 
-To see the name and type of each option, search for `#options` in [`cmd/encoder.cpp`](cmd/encoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
+To see the name and type of each option, search for `#options` in [`encoder.cpp`](encoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
 
 To see the default values of the options, search for `#default-cfg` in [`encoder.cpp`](encoder.cpp). You'll see some functions containing the default values.
 
@@ -184,7 +184,7 @@ If you want to run `decoder` on the output of `encoder` without creating an enco
 ./build/encoder video_file_path | ./build/decoder
 ```
 
-To see the name and type of each option, search for `#options` in [`cmd/decoder.cpp`](cmd/decoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
+To see the name and type of each option, search for `#options` in [`decoder.cpp`](decoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
 
 To see the default values of the options, search for `#default-cfg` in [`decoder.cpp`](decoder.cpp). You'll see some functions containing the default values.
 

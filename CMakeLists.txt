@@ -16,9 +16,17 @@ add_library(motion motion.cpp)
 add_library(draw draw.cpp)
 target_link_libraries(draw PUBLIC ${OpenCV_LIBS})
 
-add_library(decoder-lib decoder.cpp)
+add_executable(encoder encoder.cpp)
+target_link_libraries(encoder PRIVATE ${OpenCV_LIBS} cli motion draw)
 
-add_library(encoder-lib encoder.cpp)
-target_link_libraries(encoder-lib PUBLIC ${OpenCV_LIBS} motion)
+add_executable(encoder-visualizer encoder.cpp)
+target_link_libraries(encoder-visualizer PRIVATE ${OpenCV_LIBS} cli motion draw)
+target_compile_definitions(encoder-visualizer PRIVATE VISUALIZE)
 
-add_subdirectory(cmd)
+if (SVC_MOTION_SSE2)
+    target_compile_definitions(encoder PRIVATE SVC_MOTION_SSE2)
+    target_compile_definitions(encoder-visualizer PRIVATE SVC_MOTION_SSE2)
+endif()
+
+add_executable(decoder decoder.cpp)
+target_link_libraries(decoder PRIVATE ${OpenCV_LIBS} cli)
