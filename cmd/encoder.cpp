@@ -287,7 +287,7 @@ int main(int argc, char* argv[]) {
   }
 
   Encoder enc;
-  Init(&enc, &cfg.encoder);
+  InitEncoder(&enc, &cfg.encoder);
 
   uint frame_excess_w = enc.padded_frame_w - enc.cfg.frame_w;
   uint frame_excess_h = enc.padded_frame_h - enc.cfg.frame_h;
