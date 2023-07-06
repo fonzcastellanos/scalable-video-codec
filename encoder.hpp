@@ -60,14 +60,14 @@ struct Encoder {
   std::vector<uchar*> pyr_data;
 };
 
-void DefaultInit(KMeansParams* p);
-void DefaultInit(RansacParams* p);
-void DefaultInit(EncoderConfig* c);
+void DefaultInit(KMeansParams*);
+void DefaultInit(RansacParams*);
+void DefaultInit(EncoderConfig*);
 
-Status Validate(KMeansParams* p);
-Status Validate(RansacParams* c);
-Status Validate(EncoderConfig* c);
+Status Validate(KMeansParams*);
+Status Validate(RansacParams*);
+Status Validate(EncoderConfig*);
 
-void Init(Encoder* e, EncoderConfig* cfg);
+void InitEncoder(Encoder*, EncoderConfig*);
 
 #endif  // SCALABLE_VIDEO_CODEC_ENCODER_HPP

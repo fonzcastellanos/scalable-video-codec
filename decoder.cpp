@@ -7,28 +7,28 @@
  * Default Config Values    #default-cfg
  *******************************************************************************/
 
-void DefaultInit(DecoderConfig* c) {
-  assert(c);
+void DefaultInit(DecoderConfig* cfg) {
+  assert(cfg);
 
-  c->foreground_quant_step = 1;
-  c->background_quant_step = 640;
-  c->max_gaze_rect_w = 64;
-  c->max_gaze_rect_h = 64;
+  cfg->foreground_quant_step = 1;
+  cfg->background_quant_step = 640;
+  cfg->max_gaze_rect_w = 64;
+  cfg->max_gaze_rect_h = 64;
 }
 
 /*******************************************************************************
  * Config Validation Functions    #cfg-validation
  *******************************************************************************/
 
-Status Validate(DecoderConfig* c) {
-  assert(c);
+Status Validate(DecoderConfig* cfg) {
+  assert(cfg);
 
-  if (c->foreground_quant_step == 0) {
+  if (cfg->foreground_quant_step == 0) {
     std::fprintf(stderr, "Foreground quantization step must be > 0.\n");
     return kStatus_InvalidParamError;
   }
 
-  if (c->background_quant_step == 0) {
+  if (cfg->background_quant_step == 0) {
     std::fprintf(stderr, "Background quantization step must be > 0.\n");
     return kStatus_InvalidParamError;
   }

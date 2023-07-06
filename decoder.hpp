@@ -11,8 +11,8 @@ struct DecoderConfig {
   uint max_gaze_rect_h;
 };
 
-void DefaultInit(DecoderConfig* c);
+void DefaultInit(DecoderConfig*);
 
-Status Validate(DecoderConfig* c);
+Status Validate(DecoderConfig*);
 
 #endif  // SCALABLE_VIDEO_CODEC_DECODER_HPP
