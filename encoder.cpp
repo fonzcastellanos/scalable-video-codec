@@ -222,6 +222,9 @@ static void InitEncoder(Encoder* enc, EncoderConfig* cfg) {
   enc->padded_frame_h = ClosestLargerDivisible(cfg->frame_h, cfg->mv_block_h,
                                                top_lvl_reduction_factor);
 
+  enc->frame_excess_w = enc->padded_frame_w - enc->cfg.frame_w;
+  enc->frame_excess_h = enc->padded_frame_h - enc->cfg.frame_h;
+
   enc->mv_field_w = enc->padded_frame_w / cfg->mv_block_w;
   enc->mv_field_h = enc->padded_frame_h / cfg->mv_block_h;
 
@@ -230,7 +233,7 @@ static void InitEncoder(Encoder* enc, EncoderConfig* cfg) {
   enc->mv_field.resize(mv_field_sz);
   enc->mv_field_min_mad.resize(mv_field_sz);
 
-  enc->foreground_mv_field_mask.resize(mv_field_sz);
+  enc->foreground_mv_field_mask = cv::Mat1b(enc->mv_field_h, enc->mv_field_w);
   enc->foreground_mv_field_indices.reserve(mv_field_sz);
   enc->foreground_mv_features.reserve(mv_field_sz);
 
@@ -521,44 +524,6 @@ static void Write(CircularQueue<EncodedFrame>& queue, uint padded_frame_w,
 }
 #endif  // VISUALIZE
 
-/*
-class Writer {
- public:
-  Writer(CircularQueue<EncodedFrame>& queue, uint padded_frame_w,
-         uint padded_frame_h, uint transform_block_w, uint transform_block_h,
-         uint mv_field_w, uint mv_field_h, uint mv_block_w, uint mv_block_h)
-      : queue_{queue},
-        padded_frame_w_{padded_frame_w},
-        padded_frame_h_{padded_frame_h},
-        transform_block_w_{transform_block_w},
-        transform_block_h_{transform_block_h},
-        mv_field_w_{mv_field_w},
-        mv_field_h_{mv_field_h},
-        mv_block_w_{mv_block_w},
-        mv_block_h_{mv_block_h} {}
-  void operator()() {
-    while (!done_reading || !queue_.IsEmpty()) {
-      auto frame = queue_.Pop();
-      Status st = WriteEncodedFrame(
-          &frame.dct_coeffs, &frame.mv_field_block_types, padded_frame_w_,
-          padded_frame_h_, transform_block_w_, transform_block_h_, mv_field_w_,
-          mv_field_h_, mv_block_w_, mv_block_h_);
-    }
-  }
-
- private:
-  CircularQueue<EncodedFrame>& queue_;
-  uint padded_frame_w_;
-  uint padded_frame_h_;
-  uint transform_block_w_;
-  uint transform_block_h_;
-  uint mv_field_w_;
-  uint mv_field_h_;
-  uint mv_block_w_;
-  uint mv_block_h_;
-};
-*/
-
 int main(int argc, char* argv[]) {
   Config cfg;
   DefaultInit(&cfg);
@@ -606,12 +571,6 @@ int main(int argc, char* argv[]) {
 
   Encoder enc;
   InitEncoder(&enc, &cfg.encoder);
-
-  uint frame_excess_w = enc.padded_frame_w - enc.cfg.frame_w;
-  uint frame_excess_h = enc.padded_frame_h - enc.cfg.frame_h;
-
-  cv::Mat1b foreground_mv_field_mask(enc.mv_field_h, enc.mv_field_w,
-                                     enc.foreground_mv_field_mask.data());
 
   cv::Mat1b foreground_cluster_mask(enc.mv_field_h, enc.mv_field_w);
 
@@ -708,8 +667,9 @@ int main(int argc, char* argv[]) {
   vtt_params.line_thickness_scale_factor = vtt_params.font_scale_factor;
 #endif  // VISUALIZE
 
-  cv::copyMakeBorder(frame, enc.padded_frame, 0, frame_excess_h, 0,
-                     frame_excess_w, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+  cv::copyMakeBorder(frame, enc.padded_frame, 0, enc.frame_excess_h, 0,
+                     enc.frame_excess_w, cv::BORDER_CONSTANT,
+                     cv::Scalar(0, 0, 0));
   cv::cvtColor(enc.padded_frame, enc.yuv_padded_frame, cv::COLOR_BGR2YUV);
   cv::extractChannel(enc.yuv_padded_frame, enc.prev_y_padded_frame, 0);
   cv::buildPyramid(enc.prev_y_padded_frame, enc.prev_pyr,
@@ -730,8 +690,8 @@ int main(int argc, char* argv[]) {
 
   while (!done_reading || !read_queue.IsEmpty()) {
     frame = read_queue.Pop();
-    cv::copyMakeBorder(frame, enc.padded_frame, 0, frame_excess_h, 0,
-                       frame_excess_w, cv::BORDER_CONSTANT,
+    cv::copyMakeBorder(frame, enc.padded_frame, 0, enc.frame_excess_h, 0,
+                       enc.frame_excess_w, cv::BORDER_CONSTANT,
                        cv::Scalar(0, 0, 0));
 
 #ifdef VISUALIZE
@@ -779,14 +739,17 @@ int main(int argc, char* argv[]) {
     DrawViewTitle(&global_motion_view, "Global Motion (GM)", &vtt_params);
 #endif  // VISUALIZE
 
-    foreground_mv_field_mask =
+    enc.foreground_mv_field_mask =
         cv::Mat1b::ones(enc.mv_field_h, enc.mv_field_w) * 255;
-    for (uint i : background_mv_field_indices) {
-      enc.foreground_mv_field_mask[i] = 0;
+    {
+      uchar* fg_mask = enc.foreground_mv_field_mask.ptr<uchar>();
+      for (uint i : background_mv_field_indices) {
+        fg_mask[i] = 0;
+      }
     }
 
 #ifdef VISUALIZE
-    cv::resize(foreground_mv_field_mask, foreground_mask_frame,
+    cv::resize(enc.foreground_mv_field_mask, foreground_mask_frame,
                foreground_mask_frame.size(), 0, 0, cv::INTER_NEAREST_EXACT);
     cv::cvtColor(foreground_mask_frame, foreground_mask_view,
                  cv::COLOR_GRAY2BGR);
@@ -794,13 +757,13 @@ int main(int argc, char* argv[]) {
 #endif  // VISUALIZE
 
     // improve spatial connectivity of foreground mask
-    cv::morphologyEx(foreground_mv_field_mask, foreground_mv_field_mask,
+    cv::morphologyEx(enc.foreground_mv_field_mask, enc.foreground_mv_field_mask,
                      cv::MORPH_CLOSE, morph_rect);
-    cv::morphologyEx(foreground_mv_field_mask, foreground_mv_field_mask,
+    cv::morphologyEx(enc.foreground_mv_field_mask, enc.foreground_mv_field_mask,
                      cv::MORPH_OPEN, morph_rect);
 
 #ifdef VISUALIZE
-    cv::resize(foreground_mv_field_mask, foreground_mask_frame,
+    cv::resize(enc.foreground_mv_field_mask, foreground_mask_frame,
                foreground_mask_frame.size(), 0, 0, cv::INTER_NEAREST_EXACT);
     cv::cvtColor(foreground_mask_frame, foreground_mask_after_morph_view,
                  cv::COLOR_GRAY2BGR);
@@ -809,9 +772,13 @@ int main(int argc, char* argv[]) {
 #endif  // VISUALIZE
 
     enc.foreground_mv_field_indices.clear();
-    for (uint i = 0; i < enc.mv_field.size(); ++i) {
-      if (enc.foreground_mv_field_mask[i] == 255) {
-        enc.foreground_mv_field_indices.push_back(i);
+
+    {
+      uchar* fg_mask = enc.foreground_mv_field_mask.ptr<uchar>();
+      for (uint i = 0; i < enc.mv_field.size(); ++i) {
+        if (fg_mask[i] == 255) {
+          enc.foreground_mv_field_indices.push_back(i);
+        }
       }
     }
 

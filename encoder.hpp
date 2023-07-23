@@ -36,6 +36,8 @@ struct Encoder {
 
   uint padded_frame_w;
   uint padded_frame_h;
+  uint frame_excess_w;
+  uint frame_excess_h;
 
   uint mv_field_w;
   uint mv_field_h;
@@ -43,7 +45,7 @@ struct Encoder {
   std::vector<Vec2f> mv_field;
   std::vector<float> mv_field_min_mad;
 
-  std::vector<uchar> foreground_mv_field_mask;
+  cv::Mat1b foreground_mv_field_mask;
   std::vector<uint> foreground_mv_field_indices;
   std::vector<Vec4f> foreground_mv_features;
   std::vector<uint> mv_field_block_types;
