@@ -1,8 +1,11 @@
 #include "encoder.hpp"
 
+#include <atomic>
 #include <cassert>
 #include <cstdio>
+#include <functional>
 #include <opencv2/core.hpp>
+#include <thread>
 #ifdef VISUALIZE
 #include <opencv2/highgui.hpp>
 #endif  // VISUALIZE
@@ -11,6 +14,7 @@
 
 #include "cli.hpp"
 #include "codec.hpp"
+#include "queue.hpp"
 #ifdef VISUALIZE
 #include "draw.hpp"
 #endif  // VISUALIZE
@@ -482,6 +486,16 @@ static void DrawViewTitle(cv::Mat* frame, const char* text,
 }
 #endif  // VISUALIZE
 
+static std::atomic<bool> done_reading;
+
+void Read(cv::VideoCapture& vidcap, CircularQueue<cv::Mat3b>& q) {
+  cv::Mat3b frame;
+  while (vidcap.read(frame)) {
+    q.Push(frame);
+  }
+  done_reading = true;
+}
+
 int main(int argc, char* argv[]) {
   Config cfg;
   DefaultInit(&cfg);
@@ -638,7 +652,11 @@ int main(int argc, char* argv[]) {
   cv::buildPyramid(enc.prev_y_padded_frame, enc.prev_pyr,
                    enc.cfg.pyr_lvl_count - 1);
 
-  while (vidcap.read(frame)) {
+  CircularQueue<cv::Mat3b> read_queue(50);
+  std::thread reader(Read, std::ref(vidcap), std::ref(read_queue));
+
+  while (!done_reading || !read_queue.IsEmpty()) {
+    frame = read_queue.Pop();
     cv::copyMakeBorder(frame, enc.padded_frame, 0, frame_excess_h, 0,
                        frame_excess_w, cv::BORDER_CONSTANT,
                        cv::Scalar(0, 0, 0));
@@ -843,6 +861,8 @@ int main(int argc, char* argv[]) {
     enc.prev_pyr_data.swap(enc.pyr_data);
     cv::swap(enc.prev_y_padded_frame, enc.y_padded_frame);
   }
+
+  reader.join();
 
 #ifdef VISUALIZE
   cv::destroyAllWindows();

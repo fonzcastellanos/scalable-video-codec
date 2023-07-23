@@ -32,7 +32,7 @@ class CircularQueue {
   }
 
   T Pop() {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock{mutex_};
 
     not_empty_.wait(lock, [this]() { return size_ != 0; });
 
@@ -45,17 +45,17 @@ class CircularQueue {
     return item;
   }
 
-  bool IsEmpty() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+  bool IsEmpty() {
+    std::lock_guard<std::mutex> lock{mutex_};
     return size_ == 0;
   }
 
-  bool IsFull() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+  bool IsFull() {
+    std::lock_guard<std::mutex> lock{mutex_};
     return size_ == capacity_;
   }
 
-  SizeType Size() const {
+  SizeType Size() {
     std::lock_guard<std::mutex> lock{mutex_};
     return size_;
   }
