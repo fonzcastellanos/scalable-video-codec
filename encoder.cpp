@@ -488,13 +488,75 @@ static void DrawViewTitle(cv::Mat* frame, const char* text,
 
 static std::atomic<bool> done_reading;
 
-void Read(cv::VideoCapture& vidcap, CircularQueue<cv::Mat3b>& q) {
+static void Read(cv::VideoCapture& vidcap, CircularQueue<cv::Mat3b>& q) {
   cv::Mat3b frame;
   while (vidcap.read(frame)) {
     q.Push(frame);
   }
   done_reading = true;
 }
+
+#ifndef VISUALIZE
+struct EncodedFrame {
+  std::vector<cv::Mat1f> dct_coeffs;
+  std::vector<uint> mv_field_block_types;
+};
+
+static void Write(CircularQueue<EncodedFrame>& queue, uint padded_frame_w,
+                  uint padded_frame_h, uint transform_block_w,
+                  uint transform_block_h, uint mv_field_w, uint mv_field_h,
+                  uint mv_block_w, uint mv_block_h) {
+  while (!done_reading || !queue.IsEmpty()) {
+    auto frame = queue.Pop();
+    Status st = WriteEncodedFrame(
+        &frame.dct_coeffs, &frame.mv_field_block_types, padded_frame_w,
+        padded_frame_h, transform_block_w, transform_block_h, mv_field_w,
+        mv_field_h, mv_block_w, mv_block_h);
+    if (st != kStatus_Ok) {
+      std::fprintf(stderr, "Failed to write encoded frame.\n");
+      throw;
+    }
+  }
+}
+#endif  // VISUALIZE
+
+/*
+class Writer {
+ public:
+  Writer(CircularQueue<EncodedFrame>& queue, uint padded_frame_w,
+         uint padded_frame_h, uint transform_block_w, uint transform_block_h,
+         uint mv_field_w, uint mv_field_h, uint mv_block_w, uint mv_block_h)
+      : queue_{queue},
+        padded_frame_w_{padded_frame_w},
+        padded_frame_h_{padded_frame_h},
+        transform_block_w_{transform_block_w},
+        transform_block_h_{transform_block_h},
+        mv_field_w_{mv_field_w},
+        mv_field_h_{mv_field_h},
+        mv_block_w_{mv_block_w},
+        mv_block_h_{mv_block_h} {}
+  void operator()() {
+    while (!done_reading || !queue_.IsEmpty()) {
+      auto frame = queue_.Pop();
+      Status st = WriteEncodedFrame(
+          &frame.dct_coeffs, &frame.mv_field_block_types, padded_frame_w_,
+          padded_frame_h_, transform_block_w_, transform_block_h_, mv_field_w_,
+          mv_field_h_, mv_block_w_, mv_block_h_);
+    }
+  }
+
+ private:
+  CircularQueue<EncodedFrame>& queue_;
+  uint padded_frame_w_;
+  uint padded_frame_h_;
+  uint transform_block_w_;
+  uint transform_block_h_;
+  uint mv_field_w_;
+  uint mv_field_h_;
+  uint mv_block_w_;
+  uint mv_block_h_;
+};
+*/
 
 int main(int argc, char* argv[]) {
   Config cfg;
@@ -652,8 +714,16 @@ int main(int argc, char* argv[]) {
   cv::buildPyramid(enc.prev_y_padded_frame, enc.prev_pyr,
                    enc.cfg.pyr_lvl_count - 1);
 
-  CircularQueue<cv::Mat3b> read_queue(50);
+  CircularQueue<cv::Mat3b> read_queue(100);
   std::thread reader(Read, std::ref(vidcap), std::ref(read_queue));
+
+#ifndef VISUALIZE
+  CircularQueue<EncodedFrame> write_queue(100);
+  std::thread writer(Write, std::ref(write_queue), enc.padded_frame_w,
+                     enc.padded_frame_h, enc.cfg.transform_block_w,
+                     enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
+                     enc.cfg.mv_block_w, enc.cfg.mv_block_h);
+#endif  // VISUALIZE
 
   while (!done_reading || !read_queue.IsEmpty()) {
     frame = read_queue.Pop();
@@ -839,15 +909,22 @@ int main(int argc, char* argv[]) {
     Dct(&padded_frame_float, enc.cfg.transform_block_w,
         enc.cfg.transform_block_h, &dct_coeffs);
 
-    status = WriteEncodedFrame(
-        &dct_coeffs, &enc.mv_field_block_types, enc.padded_frame_w,
-        enc.padded_frame_h, enc.cfg.transform_block_w,
-        enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
-        enc.cfg.mv_block_w, enc.cfg.mv_block_h);
-    if (status != kStatus_Ok) {
-      std::fprintf(stderr, "Failed to write encoded frame.\n");
-      return EXIT_FAILURE;
+    std::vector<cv::Mat1f> dct_coeffs_copy(dct_coeffs.size());
+    for (std::vector<int>::size_type i = 0; i < dct_coeffs.size(); ++i) {
+      dct_coeffs_copy[i] = dct_coeffs[i].clone();
     }
+
+    write_queue.Push({dct_coeffs_copy, enc.mv_field_block_types});
+
+    // status = WriteEncodedFrame(
+    //     &dct_coeffs, &enc.mv_field_block_types, enc.padded_frame_w,
+    //     enc.padded_frame_h, enc.cfg.transform_block_w,
+    //     enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
+    //     enc.cfg.mv_block_w, enc.cfg.mv_block_h);
+    // if (status != kStatus_Ok) {
+    //   std::fprintf(stderr, "Failed to write encoded frame.\n");
+    //   return EXIT_FAILURE;
+    // }
 #endif  // NOT VISUALIZE
 
 #ifdef VISUALIZE
@@ -863,6 +940,9 @@ int main(int argc, char* argv[]) {
   }
 
   reader.join();
+#ifndef VISUALIZE
+  writer.join();
+#endif  // VISUALIZE
 
 #ifdef VISUALIZE
   cv::destroyAllWindows();
