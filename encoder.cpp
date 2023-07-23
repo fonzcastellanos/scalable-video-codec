@@ -15,6 +15,7 @@
 #include "cli.hpp"
 #include "codec.hpp"
 #include "queue.hpp"
+#include "thread.hpp"
 #ifdef VISUALIZE
 #include "draw.hpp"
 #endif  // VISUALIZE
@@ -716,6 +717,7 @@ int main(int argc, char* argv[]) {
 
   CircularQueue<cv::Mat3b> read_queue(100);
   std::thread reader(Read, std::ref(vidcap), std::ref(read_queue));
+  ThreadGuard reader_guard{reader};
 
 #ifndef VISUALIZE
   CircularQueue<EncodedFrame> write_queue(100);
@@ -723,6 +725,7 @@ int main(int argc, char* argv[]) {
                      enc.padded_frame_h, enc.cfg.transform_block_w,
                      enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
                      enc.cfg.mv_block_w, enc.cfg.mv_block_h);
+  ThreadGuard writer_guard{writer};
 #endif  // VISUALIZE
 
   while (!done_reading || !read_queue.IsEmpty()) {
@@ -938,11 +941,6 @@ int main(int argc, char* argv[]) {
     enc.prev_pyr_data.swap(enc.pyr_data);
     cv::swap(enc.prev_y_padded_frame, enc.y_padded_frame);
   }
-
-  reader.join();
-#ifndef VISUALIZE
-  writer.join();
-#endif  // VISUALIZE
 
 #ifdef VISUALIZE
   cv::destroyAllWindows();
