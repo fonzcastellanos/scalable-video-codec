@@ -236,8 +236,12 @@ static void InitEncoder(Encoder* enc, EncoderConfig* cfg) {
   enc->foreground_mv_field_mask = cv::Mat1b(enc->mv_field_h, enc->mv_field_w);
   enc->foreground_mv_field_indices.reserve(mv_field_sz);
   enc->foreground_mv_features.reserve(mv_field_sz);
-
   enc->mv_field_block_types.resize(mv_field_sz);
+
+  enc->foreground_cluster_mask(enc->mv_field_h, enc->mv_field_w);
+
+  enc->morph_rect = cv::getStructuringElement(
+      cv::MORPH_RECT, cv::Size(enc->cfg.morph_rect_w, enc->cfg.morph_rect_h));
 
   enc->padded_frame = cv::Mat3b(enc->padded_frame_h, enc->padded_frame_w);
   enc->yuv_padded_frame = cv::Mat3b(enc->padded_frame_h, enc->padded_frame_w);
@@ -366,7 +370,6 @@ static void BuildMvFeatures(const Vec2f* mv_field, uint mv_field_w,
   }
 }
 
-#ifndef VISUALIZE
 static void InitHeader(Header* h, Encoder* e, uint frame_count,
                        uint channel_count) {
   assert(h);
@@ -463,7 +466,6 @@ static Status WriteEncodedFrame(const std::vector<cv::Mat1f>* dct_coeffs,
 
   return res;
 }
-#endif  // NOT VISUALIZE
 
 #ifdef VISUALIZE
 const char* kWindowName = "Encoding";
@@ -500,7 +502,6 @@ static void Read(cv::VideoCapture& vidcap, CircularQueue<cv::Mat3b>& q) {
   done_reading = true;
 }
 
-#ifndef VISUALIZE
 struct EncodedFrame {
   std::vector<cv::Mat1f> dct_coeffs;
   std::vector<uint> mv_field_block_types;
@@ -522,7 +523,6 @@ static void Write(CircularQueue<EncodedFrame>& queue, uint padded_frame_w,
     }
   }
 }
-#endif  // VISUALIZE
 
 int main(int argc, char* argv[]) {
   Config cfg;
@@ -572,14 +572,9 @@ int main(int argc, char* argv[]) {
   Encoder enc;
   InitEncoder(&enc, &cfg.encoder);
 
-  cv::Mat1b foreground_cluster_mask(enc.mv_field_h, enc.mv_field_w);
-
-  cv::Mat morph_rect = cv::getStructuringElement(
-      cv::MORPH_RECT, cv::Size(enc.cfg.morph_rect_w, enc.cfg.morph_rect_h));
-
 #ifndef VISUALIZE
   std::vector<cv::Mat1f> dct_coeffs(frame.channels());
-  for (cv::Mat1f& channel : dct_coeffs) {
+  for (auto& channel : dct_coeffs) {
     channel = cv::Mat1f(enc.padded_frame_h, enc.padded_frame_w);
   }
 
@@ -667,6 +662,19 @@ int main(int argc, char* argv[]) {
   vtt_params.line_thickness_scale_factor = vtt_params.font_scale_factor;
 #endif  // VISUALIZE
 
+  CircularQueue<cv::Mat3b> read_queue(10);
+  std::thread reader(Read, std::ref(vidcap), std::ref(read_queue));
+  ThreadGuard reader_guard{reader};
+
+#ifndef VISUALIZE
+  CircularQueue<EncodedFrame> write_queue(10);
+  std::thread writer(Write, std::ref(write_queue), enc.padded_frame_w,
+                     enc.padded_frame_h, enc.cfg.transform_block_w,
+                     enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
+                     enc.cfg.mv_block_w, enc.cfg.mv_block_h);
+  ThreadGuard writer_guard{writer};
+#endif  // VISUALIZE
+
   cv::copyMakeBorder(frame, enc.padded_frame, 0, enc.frame_excess_h, 0,
                      enc.frame_excess_w, cv::BORDER_CONSTANT,
                      cv::Scalar(0, 0, 0));
@@ -674,19 +682,6 @@ int main(int argc, char* argv[]) {
   cv::extractChannel(enc.yuv_padded_frame, enc.prev_y_padded_frame, 0);
   cv::buildPyramid(enc.prev_y_padded_frame, enc.prev_pyr,
                    enc.cfg.pyr_lvl_count - 1);
-
-  CircularQueue<cv::Mat3b> read_queue(100);
-  std::thread reader(Read, std::ref(vidcap), std::ref(read_queue));
-  ThreadGuard reader_guard{reader};
-
-#ifndef VISUALIZE
-  CircularQueue<EncodedFrame> write_queue(100);
-  std::thread writer(Write, std::ref(write_queue), enc.padded_frame_w,
-                     enc.padded_frame_h, enc.cfg.transform_block_w,
-                     enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
-                     enc.cfg.mv_block_w, enc.cfg.mv_block_h);
-  ThreadGuard writer_guard{writer};
-#endif  // VISUALIZE
 
   while (!done_reading || !read_queue.IsEmpty()) {
     frame = read_queue.Pop();
@@ -758,9 +753,9 @@ int main(int argc, char* argv[]) {
 
     // improve spatial connectivity of foreground mask
     cv::morphologyEx(enc.foreground_mv_field_mask, enc.foreground_mv_field_mask,
-                     cv::MORPH_CLOSE, morph_rect);
+                     cv::MORPH_CLOSE, enc.morph_rect);
     cv::morphologyEx(enc.foreground_mv_field_mask, enc.foreground_mv_field_mask,
-                     cv::MORPH_OPEN, morph_rect);
+                     cv::MORPH_OPEN, enc.morph_rect);
 
 #ifdef VISUALIZE
     cv::resize(enc.foreground_mv_field_mask, foreground_mask_frame,
@@ -834,19 +829,19 @@ int main(int argc, char* argv[]) {
 
       uint block_type_offset = BLOCK_TYPE_BACKGROUND;
       for (uint cid = 0; cid < cluster_count; ++cid) {
-        foreground_cluster_mask =
+        enc.foreground_cluster_mask =
             cv::Mat1b::zeros(enc.mv_field_h, enc.mv_field_w);
 
         for (uint i = 0; i < enc.foreground_mv_field_indices.size(); ++i) {
           if (cluster_ids_[i] == cid) {
             uint j = enc.foreground_mv_field_indices[i];
-            foreground_cluster_mask.data[j] = 255;
+            enc.foreground_cluster_mask.data[j] = 255;
           }
         }
 
         cv::Mat1i conn_comp_ids;
         uint conn_comp_id_count = cv::connectedComponents(
-            foreground_cluster_mask, conn_comp_ids,
+            enc.foreground_cluster_mask, conn_comp_ids,
             enc.cfg.connected_components_connectivity, CV_32S,
             cv::ConnectedComponentsAlgorithmsTypes::CCL_DEFAULT);
 
@@ -885,16 +880,6 @@ int main(int argc, char* argv[]) {
     }
 
     write_queue.Push({dct_coeffs_copy, enc.mv_field_block_types});
-
-    // status = WriteEncodedFrame(
-    //     &dct_coeffs, &enc.mv_field_block_types, enc.padded_frame_w,
-    //     enc.padded_frame_h, enc.cfg.transform_block_w,
-    //     enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
-    //     enc.cfg.mv_block_w, enc.cfg.mv_block_h);
-    // if (status != kStatus_Ok) {
-    //   std::fprintf(stderr, "Failed to write encoded frame.\n");
-    //   return EXIT_FAILURE;
-    // }
 #endif  // NOT VISUALIZE
 
 #ifdef VISUALIZE

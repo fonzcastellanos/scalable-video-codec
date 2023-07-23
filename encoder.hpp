@@ -50,6 +50,9 @@ struct Encoder {
   std::vector<Vec4f> foreground_mv_features;
   std::vector<uint> mv_field_block_types;
 
+  cv::Mat1b foreground_cluster_mask;
+  cv::Mat morph_rect;
+
   cv::Mat3b padded_frame;
   cv::Mat3b yuv_padded_frame;
   cv::Mat1b prev_y_padded_frame;
