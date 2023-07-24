@@ -34,7 +34,7 @@ class CircularQueue {
 
     is_not_empty_.wait(lock, [this]() { return size_ != 0; });
 
-    T item = std::move(buffer_[read_idx_]);
+    T item = buffer_[read_idx_];
     read_idx_ = (read_idx_ + 1) % capacity_;
     --size_;
 
