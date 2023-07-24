@@ -10,9 +10,7 @@
 template <typename T>
 class CircularQueue {
  public:
-  using SizeType = std::size_t;
-
-  CircularQueue(SizeType capacity)
+  CircularQueue(std::size_t capacity)
       : buffer_{std::make_unique<T[]>(capacity)},
         capacity_{capacity},
         size_{},
@@ -55,17 +53,17 @@ class CircularQueue {
     return size_ == capacity_;
   }
 
-  SizeType Size() {
+  std::size_t Size() {
     std::lock_guard<std::mutex> lock{mutex_};
     return size_;
   }
 
  private:
   std::unique_ptr<T[]> buffer_;
-  SizeType capacity_;
-  SizeType size_;
-  SizeType read_idx_;
-  SizeType write_idx_;
+  std::size_t capacity_;
+  std::size_t size_;
+  std::size_t read_idx_;
+  std::size_t write_idx_;
   std::mutex mutex_;
   std::condition_variable is_not_full_;
   std::condition_variable is_not_empty_;
