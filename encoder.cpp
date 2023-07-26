@@ -2,10 +2,13 @@
 
 #include <atomic>
 #include <cassert>
+#include <condition_variable>
 #include <cstdio>
+#include <exception>
 #include <functional>
 #include <opencv2/core.hpp>
 #include <thread>
+#include <utility>
 #ifdef VISUALIZE
 #include <opencv2/highgui.hpp>
 #endif  // VISUALIZE
@@ -492,37 +495,68 @@ static void DrawViewTitle(cv::Mat* frame, const char* text,
 }
 #endif  // VISUALIZE
 
-static std::atomic<bool> done_reading;
+struct Read {
+  cv::VideoCapture& vidcap;
+  CircularQueue<cv::Mat3b>& queue;
+  std::atomic<bool>& done_reading;
+  std::condition_variable& attempted_to_read_first_frame;
 
-static void Read(cv::VideoCapture& vidcap, CircularQueue<cv::Mat3b>& q) {
-  cv::Mat3b frame;
-  while (vidcap.read(frame)) {
-    q.Push(frame);
+  void operator()() const {
+    cv::Mat3b frame;
+
+    if (!vidcap.read(frame)) {
+      done_reading = true;
+      attempted_to_read_first_frame.notify_one();
+      return;
+    }
+
+    queue.Push(frame);
+    attempted_to_read_first_frame.notify_one();
+
+    while (vidcap.read(frame)) {
+      queue.Push(frame);
+    }
+    done_reading = true;
   }
-  done_reading = true;
-}
+};
 
 struct EncodedFrame {
   std::vector<cv::Mat1f> dct_coeffs;
   std::vector<uint> mv_field_block_types;
 };
 
-static void Write(CircularQueue<EncodedFrame>& queue, uint padded_frame_w,
-                  uint padded_frame_h, uint transform_block_w,
-                  uint transform_block_h, uint mv_field_w, uint mv_field_h,
-                  uint mv_block_w, uint mv_block_h) {
-  while (!done_reading || !queue.IsEmpty()) {
-    auto frame = queue.Pop();
-    Status st = WriteEncodedFrame(
-        &frame.dct_coeffs, &frame.mv_field_block_types, padded_frame_w,
-        padded_frame_h, transform_block_w, transform_block_h, mv_field_w,
-        mv_field_h, mv_block_w, mv_block_h);
-    if (st != kStatus_Ok) {
-      std::fprintf(stderr, "Failed to write encoded frame.\n");
-      throw;
+struct Write {
+  CircularQueue<EncodedFrame>& queue;
+  std::atomic<bool>& done_reading;
+  uint padded_frame_w;
+  uint padded_frame_h;
+  uint transform_block_w;
+  uint transform_block_h;
+  uint mv_field_w;
+  uint mv_field_h;
+  uint mv_block_w;
+  uint mv_block_h;
+
+  void operator()() const {
+    while (!done_reading || !queue.IsEmpty()) {
+      auto frame = queue.Pop();
+      Status st = WriteEncodedFrame(
+          &frame.dct_coeffs, &frame.mv_field_block_types, padded_frame_w,
+          padded_frame_h, transform_block_w, transform_block_h, mv_field_w,
+          mv_field_h, mv_block_w, mv_block_h);
+      if (st != kStatus_Ok) {
+        throw std::runtime_error{"Failed to write encoded frame"};
+      }
     }
   }
-}
+};
+
+#ifdef VISUALIZE
+static void Encode(Encoder* enc, CircularQueue<cv::Mat1b>& in_frames);
+#else
+static void Encode(Encoder* enc, CircularQueue<cv::Mat1b>& in_frames,
+                   CircularQueue<EncodedFrame> out_frames);
+#endif  // VISUALIZE
 
 int main(int argc, char* argv[]) {
   Config cfg;
@@ -562,22 +596,42 @@ int main(int argc, char* argv[]) {
     std::fprintf(stderr, "  Frame count: %u\n", frame_count);
   }
 
-  cv::Mat3b frame;
+  Encoder enc;
+  InitEncoder(&enc, &cfg.encoder);
 
-  if (!vidcap.read(frame)) {
+  std::atomic<bool> done_reading;
+  std::condition_variable attempted_to_read_first_frame;
+  std::mutex attempted_to_read_first_frame_mutex;
+
+  CircularQueue<cv::Mat3b> read_queue{10};
+  Read read{vidcap, read_queue, done_reading, attempted_to_read_first_frame};
+
+  std::vector<IJThread> threads;
+  threads.push_back(IJThread{read});
+
+  {
+    std::unique_lock<std::mutex> lock{attempted_to_read_first_frame_mutex};
+    attempted_to_read_first_frame.wait(lock, [&done_reading, &read_queue]() {
+      return done_reading || !read_queue.IsEmpty();
+    });
+  }
+
+  if (read_queue.IsEmpty()) {
+    // Because of the statements in the prior block, empty read queue implies
+    // reading is done, and so read thread is done.
+    assert(done_reading);
+
     std::fprintf(stderr, "No frames in video file.\n");
     return EXIT_SUCCESS;
   }
 
-  Encoder enc;
-  InitEncoder(&enc, &cfg.encoder);
+  cv::Mat3b frame = read_queue.Pop();
 
 #ifndef VISUALIZE
   std::vector<cv::Mat1f> dct_coeffs(frame.channels());
   for (auto& channel : dct_coeffs) {
     channel = cv::Mat1f(enc.padded_frame_h, enc.padded_frame_w);
   }
-
   cv::Mat3f padded_frame_float(enc.padded_frame_h, enc.padded_frame_w);
 
   {
@@ -593,10 +647,28 @@ int main(int argc, char* argv[]) {
     uint count = std::fwrite(&header, sizeof(header), 1, stdout);
     if (count < 1) {
       std::fprintf(stderr, "Failed to write header.\n");
+      threads.back().Interrupt();
       return EXIT_FAILURE;
     }
   }
 #endif  // NOT VISUALIZE
+
+#ifndef VISUALIZE
+  CircularQueue<EncodedFrame> write_queue{10};
+  auto write = Write{write_queue,
+                     done_reading,
+                     enc.padded_frame_w,
+                     enc.padded_frame_h,
+                     enc.cfg.transform_block_w,
+                     enc.cfg.transform_block_h,
+                     enc.mv_field_w,
+                     enc.mv_field_h,
+                     enc.cfg.mv_block_w,
+                     enc.cfg.mv_block_h};
+  threads.push_back(IJThread{write});
+#endif  // VISUALIZE
+
+  InterruptGuard interrupt_guard{std::move(threads)};
 
 #ifdef VISUALIZE
   //---------------------------------------------------------------------------
@@ -660,19 +732,6 @@ int main(int argc, char* argv[]) {
   }
   vtt_params.line_type = cv::LineTypes::LINE_AA;
   vtt_params.line_thickness_scale_factor = vtt_params.font_scale_factor;
-#endif  // VISUALIZE
-
-  CircularQueue<cv::Mat3b> read_queue(10);
-  std::thread reader(Read, std::ref(vidcap), std::ref(read_queue));
-  ThreadGuard reader_guard{reader};
-
-#ifndef VISUALIZE
-  CircularQueue<EncodedFrame> write_queue(10);
-  std::thread writer(Write, std::ref(write_queue), enc.padded_frame_w,
-                     enc.padded_frame_h, enc.cfg.transform_block_w,
-                     enc.cfg.transform_block_h, enc.mv_field_w, enc.mv_field_h,
-                     enc.cfg.mv_block_w, enc.cfg.mv_block_h);
-  ThreadGuard writer_guard{writer};
 #endif  // VISUALIZE
 
   cv::copyMakeBorder(frame, enc.padded_frame, 0, enc.frame_excess_h, 0,

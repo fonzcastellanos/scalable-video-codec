@@ -7,6 +7,8 @@
 #include <mutex>
 #include <utility>
 
+#include "thread.hpp"
+
 template <typename T>
 class CircularQueue {
  public:
@@ -20,7 +22,10 @@ class CircularQueue {
   void Push(T item) {
     std::unique_lock<std::mutex> lock{mutex_};
 
-    is_not_full_.wait(lock, [this]() { return size_ != capacity_; });
+    InterruptibleWait(is_not_full_, lock,
+                      [this]() { return size_ != capacity_; });
+
+    // is_not_full_.wait(lock, [this]() { return size_ != capacity_; });
 
     buffer_[write_idx_] = std::move(item);
     write_idx_ = (write_idx_ + 1) % capacity_;
@@ -32,7 +37,9 @@ class CircularQueue {
   T Pop() {
     std::unique_lock<std::mutex> lock{mutex_};
 
-    is_not_empty_.wait(lock, [this]() { return size_ != 0; });
+    InterruptibleWait(is_not_empty_, lock, [this]() { return size_ != 0; });
+
+    // is_not_empty_.wait(lock, [this]() { return size_ != 0; });
 
     T item = buffer_[read_idx_];
     read_idx_ = (read_idx_ + 1) % capacity_;
@@ -65,8 +72,10 @@ class CircularQueue {
   std::size_t read_idx_;
   std::size_t write_idx_;
   std::mutex mutex_;
-  std::condition_variable is_not_full_;
-  std::condition_variable is_not_empty_;
+  // std::condition_variable is_not_full_;
+  // std::condition_variable is_not_empty_;
+  std::condition_variable_any is_not_full_;
+  std::condition_variable_any is_not_empty_;
 };
 
 #endif  // SCALABLE_VIDEO_CODEC_QUEUE_HPP
