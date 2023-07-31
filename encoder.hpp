@@ -1,11 +1,15 @@
 #ifndef SCALABLE_VIDEO_CODEC_ENCODER_HPP
 #define SCALABLE_VIDEO_CODEC_ENCODER_HPP
 
+#include <condition_variable>
+#include <future>
+#include <mutex>
 #include <opencv2/core/mat.hpp>
 #include <vector>
 
 #include "math.hpp"
 #include "motion.hpp"
+#include "queue.hpp"
 #include "types.hpp"
 
 struct KMeansParams {
@@ -27,41 +31,72 @@ struct EncoderConfig {
   uint connected_components_connectivity;
   uint transform_block_w;
   uint transform_block_h;
-  uint frame_w;
-  uint frame_h;
 };
 
-struct Encoder {
-  EncoderConfig cfg;
-
-  uint padded_frame_w;
-  uint padded_frame_h;
-  uint frame_excess_w;
-  uint frame_excess_h;
-
-  uint mv_field_w;
-  uint mv_field_h;
-
-  std::vector<Vec2f> mv_field;
-  std::vector<float> mv_field_min_mad;
-
-  cv::Mat1b foreground_mv_field_mask;
-  std::vector<uint> foreground_mv_field_indices;
-  std::vector<Vec4f> foreground_mv_features;
+struct EncodedFrame {
+  std::vector<cv::Mat1f> dct_coeffs;
   std::vector<uint> mv_field_block_types;
+};
 
-  cv::Mat1b foreground_cluster_mask;
-  cv::Mat morph_rect;
+struct SharedReaderEncoderData {
+  CircularQueue<cv::Mat3b> queue;
+  std::atomic<bool> reader_is_done;
+};
 
-  cv::Mat3b padded_frame;
-  cv::Mat3b yuv_padded_frame;
-  cv::Mat1b prev_y_padded_frame;
-  cv::Mat1b y_padded_frame;
+struct SharedWriterEncoderData {
+  CircularQueue<std::vector<uchar>> queue;
+  std::atomic<bool> encoder_is_done;
+};
 
-  std::vector<cv::Mat1b> prev_pyr;
-  std::vector<uchar*> prev_pyr_data;
-  std::vector<cv::Mat1b> pyr;
-  std::vector<uchar*> pyr_data;
+struct VideoProperties {
+  uint frame_w;
+  uint frame_h;
+  uint frame_count;
+};
+
+class Encoder {
+ public:
+  Encoder(const EncoderConfig& cfg, const VideoProperties& vidprops,
+          SharedReaderEncoderData& shared_reader_data,
+          std::future<void> attempted_first_frame_read,
+          SharedWriterEncoderData& shared_writer_data);
+  void operator()();
+
+ private:
+  EncoderConfig cfg_;
+  VideoProperties vidprops_;
+  SharedReaderEncoderData& shared_reader_data_;
+  std::future<void> attempted_first_frame_read_;
+  SharedWriterEncoderData& shared_writer_data_;
+
+  uint padded_frame_w_;
+  uint padded_frame_h_;
+  uint frame_excess_w_;
+  uint frame_excess_h_;
+
+  uint mv_field_w_;
+  uint mv_field_h_;
+
+  std::vector<Vec2f> mv_field_;
+  std::vector<float> mv_field_min_mad_;
+
+  cv::Mat1b foreground_mv_field_mask_;
+  std::vector<uint> foreground_mv_field_indices_;
+  std::vector<Vec4f> foreground_mv_features_;
+  std::vector<uint> mv_field_block_types_;
+
+  cv::Mat1b foreground_cluster_mask_;
+  cv::Mat morph_rect_;
+
+  cv::Mat3b padded_frame_;
+  cv::Mat3b yuv_padded_frame_;
+  cv::Mat1b prev_y_padded_frame_;
+  cv::Mat1b y_padded_frame_;
+
+  std::vector<cv::Mat1b> prev_pyr_;
+  std::vector<uchar*> prev_pyr_data_;
+  std::vector<cv::Mat1b> pyr_;
+  std::vector<uchar*> pyr_data_;
 };
 
 struct Config {

@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <cassert>
-#include <condition_variable>
 #include <cstdio>
 #include <exception>
 #include <functional>
@@ -17,11 +16,586 @@
 
 #include "cli.hpp"
 #include "codec.hpp"
-#include "queue.hpp"
 #include "thread.hpp"
 #ifdef VISUALIZE
 #include "draw.hpp"
 #endif  // VISUALIZE
+
+static SharedReaderEncoderData shared_reader_encoder_data{{10}, {}};
+static SharedWriterEncoderData shared_writer_encoder_data{{10}, {}};
+
+Encoder::Encoder(const EncoderConfig& cfg, const VideoProperties& vidprops,
+                 SharedReaderEncoderData& shared_reader_data,
+                 std::future<void> attempted_first_frame_read,
+                 SharedWriterEncoderData& shared_writer_data)
+    : cfg_{cfg},
+      vidprops_{vidprops},
+      shared_reader_data_{shared_reader_data},
+      attempted_first_frame_read_{std::move(attempted_first_frame_read)},
+      shared_writer_data_{shared_writer_data} {
+  // The notation a|b denotes a divides b.
+  // Theorem: If a|b and b|c, then a|c.
+  //
+  // Therefore, if the MV block width and height are divisible by the
+  // transform block width and height, respectively, and the frame width
+  // and height are made divisible by the MV block width and height,
+  // respectively, then the frame width and height are also divisible by the
+  // transform block width and height. That's why there's no need to
+  // involve the transform block dimensions in these calculations. So
+  // long as the MV block width and height are divisible by the
+  // transform block width and height, we're good. Validation of
+  // configuration ensures this.
+  uint top_lvl_reduction_factor = Pow2(cfg_.pyr_lvl_count - 1);
+  padded_frame_w_ = ClosestLargerDivisible(vidprops_.frame_w, cfg_.mv_block_w,
+                                           top_lvl_reduction_factor);
+  padded_frame_h_ = ClosestLargerDivisible(vidprops_.frame_h, cfg_.mv_block_h,
+                                           top_lvl_reduction_factor);
+
+  frame_excess_w_ = padded_frame_w_ - vidprops_.frame_w;
+  frame_excess_h_ = padded_frame_h_ - vidprops_.frame_h;
+
+  mv_field_w_ = padded_frame_w_ / cfg_.mv_block_w;
+  mv_field_h_ = padded_frame_h_ / cfg_.mv_block_h;
+
+  uint mv_field_sz = mv_field_w_ * mv_field_h_;
+
+  mv_field_.resize(mv_field_sz);
+  mv_field_min_mad_.resize(mv_field_sz);
+
+  foreground_mv_field_mask_ = cv::Mat1b(mv_field_h_, mv_field_w_);
+  foreground_mv_field_indices_.reserve(mv_field_sz);
+  foreground_mv_features_.reserve(mv_field_sz);
+  mv_field_block_types_.resize(mv_field_sz);
+
+  foreground_cluster_mask_(mv_field_h_, mv_field_w_);
+
+  morph_rect_ = cv::getStructuringElement(
+      cv::MORPH_RECT, cv::Size(cfg_.morph_rect_w, cfg_.morph_rect_h));
+
+  padded_frame_ = cv::Mat3b(padded_frame_h_, padded_frame_w_);
+  yuv_padded_frame_ = cv::Mat3b(padded_frame_h_, padded_frame_w_);
+  prev_y_padded_frame_ = cv::Mat1b(padded_frame_h_, padded_frame_w_);
+  y_padded_frame_ = cv::Mat1b(padded_frame_h_, padded_frame_w_);
+
+  prev_pyr_.resize(cfg_.pyr_lvl_count);
+  prev_pyr_data_.resize(cfg_.pyr_lvl_count);
+  pyr_.resize(cfg_.pyr_lvl_count);
+  pyr_data_.resize(cfg_.pyr_lvl_count);
+
+  prev_pyr_[0] = prev_y_padded_frame_;
+  prev_pyr_data_[0] = prev_pyr_[0].data;
+  pyr_[0] = y_padded_frame_;
+  pyr_data_[0] = pyr_[0].data;
+  {
+    uint w = padded_frame_w_ / 2;
+    uint h = padded_frame_h_ / 2;
+    for (uint i = 1; i < cfg_.pyr_lvl_count; ++i) {
+      prev_pyr_[i] = cv::Mat1b(h, w);
+      prev_pyr_data_[i] = prev_pyr_[i].data;
+
+      pyr_[i] = cv::Mat1b(h, w);
+      pyr_data_[i] = pyr_[i].data;
+
+      w /= 2;
+      h /= 2;
+    }
+  }
+}
+
+struct Reader {
+  cv::VideoCapture& vc;
+  SharedReaderEncoderData& sh;
+  std::promise<void> attempted_first_frame_read;
+
+  void operator()() {
+    cv::Mat3b frame;
+
+    if (!vc.read(frame)) {
+      sh.reader_is_done = true;
+      attempted_first_frame_read.set_value();
+      return;
+    }
+
+    sh.queue.Push(frame);
+
+    attempted_first_frame_read.set_value();
+
+    while (vc.read(frame)) {
+      sh.queue.Push(frame);
+    }
+
+    sh.reader_is_done = true;
+  }
+};
+
+static std::vector<uchar> SerializeEncodedFrame(
+    const std::vector<cv::Mat1f>* dct_coeffs,
+    const std::vector<uint>* mv_field_block_types, uint frame_w, uint frame_h,
+    uint transform_block_w, uint transform_block_h, uint mv_field_w,
+    uint mv_field_h, uint mv_block_w, uint mv_block_h) {
+  assert(dct_coeffs);
+  assert(mv_field_block_types);
+
+  assert(transform_block_h > 0);
+  assert(transform_block_w > 0);
+
+  assert(frame_w % transform_block_h == 0);
+  assert(frame_h % transform_block_w == 0);
+
+  assert(mv_field_w * mv_field_h == mv_field_block_types->size());
+
+  assert(transform_block_h <= mv_block_w);
+  assert(transform_block_w <= mv_block_h);
+
+  assert(mv_block_h % transform_block_w == 0);
+  assert(mv_block_w % transform_block_h == 0);
+
+  std::vector<uchar> result;
+
+  for (uint tb_y = 0; tb_y < frame_h; tb_y += transform_block_h) {
+    for (uint tb_x = 0; tb_x < frame_w; tb_x += transform_block_w) {
+      uint mv_field_y = tb_y / mv_block_h;
+      uint mv_field_x = tb_x / mv_block_w;
+      uint mv_field_i = mv_field_y * mv_field_w + mv_field_x;
+
+      uint btype = (*mv_field_block_types)[mv_field_i];
+
+      result.insert(result.end(), (uchar*)(&btype),
+                    ((uchar*)(&btype)) + sizeof(btype));
+
+      for (const auto& channel : (*dct_coeffs)) {
+        float* coeffs = (float*)channel.data;
+
+        for (uint y = tb_y; y < tb_y + transform_block_w; ++y) {
+          float* row = &coeffs[y * frame_w + tb_x];
+
+          result.insert(result.end(), (uchar*)row,
+                        ((uchar*)row) + sizeof(float) * transform_block_h);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+struct Writer {
+  SharedWriterEncoderData& sh;
+  void operator()() {
+    while (!sh.encoder_is_done || !sh.queue.IsEmpty()) {
+      auto bytes = sh.queue.Pop();
+      uint count = std::fwrite(bytes.data(), 1, bytes.size(), stdout);
+      if (count < bytes.size()) {
+        std::fprintf(stderr, "Failed to write bytes.\n");
+        return;
+      }
+    }
+  }
+};
+
+#ifdef VISUALIZE
+const char* kWindowName = "Encoding";
+
+struct ViewTitleTextParams {
+  cv::Scalar outline_color;
+  cv::Scalar fill_color;
+  cv::HersheyFonts font;
+  float font_scale_factor;
+  cv::Point2i origin;
+  cv::LineTypes line_type;
+  float line_thickness_scale_factor;
+};
+
+static void DrawViewTitle(cv::Mat* frame, const char* text,
+                          ViewTitleTextParams* params) {
+  assert(frame);
+  assert(text);
+  assert(params);
+
+  DrawOutlinedText(frame, text, params->origin, params->outline_color,
+                   params->fill_color, params->font, params->font_scale_factor,
+                   params->line_thickness_scale_factor, params->line_type);
+}
+#endif  // VISUALIZE
+
+static void BuildMvFeatures(const Vec2f* mv_field, uint mv_field_w,
+                            uint mv_block_w, uint mv_block_h,
+                            const uint* mv_field_indices,
+                            uint mv_field_indices_sz, Vec4f* features) {
+  assert(mv_field);
+  assert(features);
+  assert(mv_field_w > 0);
+  assert(mv_field_indices_sz == 0 || mv_field_indices);
+
+  for (uint i = 0; i < mv_field_indices_sz; ++i) {
+    uint mf_i = mv_field_indices[i];
+
+    uint mf_y = mf_i / mv_field_w;
+    uint mf_x = mf_i % mv_field_w;
+
+    uint y = mf_y * mv_block_h;
+    uint x = mf_x * mv_block_w;
+
+    Vec2f m = mv_field[mf_i];
+
+    features[i][0] = m.x;
+    features[i][1] = m.y;
+    features[i][1] = x;
+    features[i][2] = y;
+  }
+}
+
+static void Dct(const cv::Mat3f* frame, uint block_w, uint block_h,
+                std::vector<cv::Mat1f>* coeffs) {
+  assert(frame);
+  assert(coeffs);
+
+  assert(block_h > 0);
+  assert(block_w > 0);
+
+  cv::split(*frame, *coeffs);
+
+  for (const auto& channel : *coeffs) {
+    for (uint y = 0; y < frame->rows; y += block_h) {
+      for (uint x = 0; x < frame->cols; x += block_w) {
+        cv::Rect roi(x, y, block_w, block_h);
+        cv::Mat1f block = channel(roi);
+        cv::dct(block, block);
+      }
+    }
+  }
+}
+
+void Encoder::operator()() {
+  attempted_first_frame_read_.wait();
+
+  auto& inqueue = shared_reader_data_.queue;
+
+  if (inqueue.IsEmpty()) {
+    // An empty queue after attempting to read the first frame implies the
+    // reader is done.
+    assert(shared_reader_data_.reader_is_done);
+    return;
+  }
+
+  cv::Mat3b frame = inqueue.Pop();
+
+  std::vector<cv::Mat1f> dct_coeffs(frame.channels());
+  for (auto& ch : dct_coeffs) {
+    ch = cv::Mat1f(padded_frame_h_, padded_frame_w_);
+  }
+
+  cv::Mat3f padded_frame_float(padded_frame_h_, padded_frame_w_);
+
+  auto& outqueue = shared_writer_data_.queue;
+
+  {
+    // TODO: Support I-frames
+    // First frame is not included in the encoded video. It is used as a
+    // tracked frame and not an anchor frame.
+    uint frame_count = vidprops_.frame_count;
+    if (frame_count > 0) {
+      --frame_count;
+    }
+    Header h{frame_count,
+             vidprops_.frame_w,
+             vidprops_.frame_h,
+             frame_excess_w_,
+             frame_excess_h_,
+             cfg_.transform_block_w,
+             cfg_.transform_block_h,
+             static_cast<uint>(frame.channels())};
+
+    auto first = reinterpret_cast<uchar*>(&h);
+    auto last = first + sizeof(h);
+    std::vector<uchar> buf(first, last);
+    outqueue.Push(std::move(buf));
+  }
+
+#ifdef VISUALIZE
+  //---------------------------------------------------------------------------
+  // ALLOCATE WINDOW VIEWS AND OTHER VISUALIZATION-RELATED DATA STRUCTURES
+  //---------------------------------------------------------------------------
+  cv::Mat3b window_views;
+  // window row 1
+  cv::Mat3b pyr_base_view;
+  cv::Mat3b motion_field_view;
+  cv::Mat3b global_motion_view;
+  // window row 2
+  cv::Mat3b foreground_mask_view;
+  cv::Mat3b foreground_mask_after_morph_view;
+  cv::Mat3b foreground_clusters_view;
+  // window row 3
+  cv::Mat3b foreground_regions_view;
+  {
+    int w = padded_frame_w_;
+    int h = padded_frame_h_;
+
+    window_views = cv::Mat3b(h * 3, w * 3);
+
+    cv::Rect r(cv::Point2i(0, 0), cv::Size2i(w, h));
+    pyr_base_view = window_views(r);
+    motion_field_view = window_views(r + cv::Point2i(w, 0));
+    global_motion_view = window_views(r + cv::Point2i(w * 2, 0));
+
+    r.y = h;
+    foreground_mask_view = window_views(r);
+    foreground_mask_after_morph_view = window_views(r + cv::Point2i(w, 0));
+    foreground_clusters_view = window_views(r + cv::Point2i(w * 2, 0));
+
+    r.y = 2 * h;
+    foreground_regions_view = window_views(r);
+  }
+
+  cv::Mat1b foreground_mask_frame(padded_frame_h_, padded_frame_w_);
+  cv::Mat3b foreground_cluster_frame(mv_field_h_, mv_field_w_);
+  cv::Mat3b foreground_regions_frame(mv_field_h_, mv_field_w_);
+
+  std::vector<uint> foreground_cluster_ids(mv_field_.size());
+
+  cv::namedWindow(kWindowName);
+
+  ArrowedLineParams line_params;
+  DefaultInit(&line_params);
+
+  ViewTitleTextParams vtt_params;
+  vtt_params.outline_color = cv::Scalar(0, 0, 0);
+  vtt_params.fill_color = cv::Scalar(255, 255, 255);
+  vtt_params.font = cv::HersheyFonts::FONT_HERSHEY_COMPLEX;
+  vtt_params.font_scale_factor =
+      (1.0f / 640.0f) * Min(padded_frame_w_, padded_frame_h_);
+  {
+    float text_origin_scale_factor = 2 * vtt_params.font_scale_factor;
+    vtt_params.origin = cv::Point2i(8, 16);
+    vtt_params.origin.x =
+        RoundFloatToInt(vtt_params.origin.x * text_origin_scale_factor);
+    vtt_params.origin.y =
+        RoundFloatToInt(vtt_params.origin.y * text_origin_scale_factor);
+  }
+  vtt_params.line_type = cv::LineTypes::LINE_AA;
+  vtt_params.line_thickness_scale_factor = vtt_params.font_scale_factor;
+#endif  // VISUALIZE
+
+  cv::copyMakeBorder(frame, padded_frame_, 0, frame_excess_h_, 0,
+                     frame_excess_w_, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+  cv::cvtColor(padded_frame_, yuv_padded_frame_, cv::COLOR_BGR2YUV);
+  cv::extractChannel(yuv_padded_frame_, prev_y_padded_frame_, 0);
+  cv::buildPyramid(prev_y_padded_frame_, prev_pyr_, cfg_.pyr_lvl_count - 1);
+
+  while (!shared_reader_data_.reader_is_done || !inqueue.IsEmpty()) {
+    frame = inqueue.Pop();
+    cv::copyMakeBorder(frame, padded_frame_, 0, frame_excess_h_, 0,
+                       frame_excess_w_, cv::BORDER_CONSTANT,
+                       cv::Scalar(0, 0, 0));
+
+#ifdef VISUALIZE
+    padded_frame_.copyTo(pyr_base_view);
+    DrawViewTitle(&pyr_base_view, "Base", &vtt_params);
+#endif  // VISUALIZE
+
+    cv::cvtColor(padded_frame_, yuv_padded_frame_, cv::COLOR_BGR2YUV);
+    cv::extractChannel(yuv_padded_frame_, y_padded_frame_, 0);
+    cv::buildPyramid(y_padded_frame_, pyr_, cfg_.pyr_lvl_count - 1);
+
+#if defined(__SSE2__) && defined(SVC_MOTION_SSE2)
+    EstimateMotionHierarchical16x16Sse2(prev_pyr_data_.data(), pyr_data_.data(),
+                                        padded_frame_w_, padded_frame_h_,
+                                        cfg_.mv_search_range, mv_field_.data(),
+                                        mv_field_min_mad_.data());
+#else
+    EstimateMotionHierarchical(
+        prev_pyr_data_.data(), pyr_data_.data(), cfg_.pyr_lvl_count,
+        padded_frame_w_, padded_frame_h_, cfg_.mv_search_range, cfg_.mv_block_w,
+        cfg_.mv_block_h, mv_field_.data(), mv_field_min_mad_.data());
+#endif
+
+#ifdef VISUALIZE
+    padded_frame_.copyTo(motion_field_view);
+    DrawMotionField(mv_field_.data(), cfg_.mv_block_w, cfg_.mv_block_h,
+                    &line_params, &motion_field_view);
+    DrawViewTitle(&motion_field_view, "Motion Field (MF)", &vtt_params);
+#endif  // VISUALIZE
+
+    Vec2f global_motion;
+    std::vector<uint> background_mv_field_indices;
+    {
+      float rmse;
+      EstimateGlobalMotionRansac(mv_field_.data(), mv_field_.size(),
+                                 cfg_.ransac, &rmse, &global_motion,
+                                 &background_mv_field_indices);
+    }
+
+#ifdef VISUALIZE
+    padded_frame_.copyTo(global_motion_view);
+    DrawMotionVecAsField(global_motion, cfg_.mv_block_w, cfg_.mv_block_h,
+                         &line_params, &global_motion_view);
+    DrawViewTitle(&global_motion_view, "Global Motion (GM)", &vtt_params);
+#endif  // VISUALIZE
+
+    foreground_mv_field_mask_ = cv::Mat1b::ones(mv_field_h_, mv_field_w_) * 255;
+    {
+      uchar* fg_mask = foreground_mv_field_mask_.ptr<uchar>();
+      for (uint i : background_mv_field_indices) {
+        fg_mask[i] = 0;
+      }
+    }
+
+#ifdef VISUALIZE
+    cv::resize(foreground_mv_field_mask_, foreground_mask_frame,
+               foreground_mask_frame.size(), 0, 0, cv::INTER_NEAREST_EXACT);
+    cv::cvtColor(foreground_mask_frame, foreground_mask_view,
+                 cv::COLOR_GRAY2BGR);
+    DrawViewTitle(&foreground_mask_view, "Foreground (FG) Mask", &vtt_params);
+#endif  // VISUALIZE
+
+    // improve spatial connectivity of foreground mask
+    cv::morphologyEx(foreground_mv_field_mask_, foreground_mv_field_mask_,
+                     cv::MORPH_CLOSE, morph_rect_);
+    cv::morphologyEx(foreground_mv_field_mask_, foreground_mv_field_mask_,
+                     cv::MORPH_OPEN, morph_rect_);
+
+#ifdef VISUALIZE
+    cv::resize(foreground_mv_field_mask_, foreground_mask_frame,
+               foreground_mask_frame.size(), 0, 0, cv::INTER_NEAREST_EXACT);
+    cv::cvtColor(foreground_mask_frame, foreground_mask_after_morph_view,
+                 cv::COLOR_GRAY2BGR);
+    DrawViewTitle(&foreground_mask_after_morph_view, "FG Mask After Morph",
+                  &vtt_params);
+#endif  // VISUALIZE
+
+    foreground_mv_field_indices_.clear();
+
+    {
+      uchar* fg_mask = foreground_mv_field_mask_.ptr<uchar>();
+      for (uint i = 0; i < mv_field_.size(); ++i) {
+        if (fg_mask[i] == 255) {
+          foreground_mv_field_indices_.push_back(i);
+        }
+      }
+    }
+
+    for (uint& t : mv_field_block_types_) {
+      t = BLOCK_TYPE_BACKGROUND;
+    }
+
+#ifdef VISUALIZE
+    padded_frame_.copyTo(foreground_clusters_view);
+#endif  // VISUALIZE
+
+    if (!foreground_mv_field_indices_.empty()) {
+      uint cluster_count =
+          Min(cfg_.kmeans.cluster_count, foreground_mv_field_indices_.size());
+
+      cv::Mat1i cluster_ids;
+      {
+        foreground_mv_features_.resize(foreground_mv_field_indices_.size());
+        BuildMvFeatures(mv_field_.data(), mv_field_w_, cfg_.mv_block_w,
+                        cfg_.mv_block_h, foreground_mv_field_indices_.data(),
+                        foreground_mv_field_indices_.size(),
+                        foreground_mv_features_.data());
+        cv::Mat4f fg_mv_features(foreground_mv_features_.size(), 1,
+                                 (cv::Vec4f*)foreground_mv_features_.data());
+
+        cv::TermCriteria term_crit(
+            cv::TermCriteria::COUNT | cv::TermCriteria::EPS,
+            cfg_.kmeans.max_iter_count, cfg_.kmeans.epsilon);
+
+        cv::kmeans(fg_mv_features, cluster_count, cluster_ids, term_crit,
+                   cfg_.kmeans.attempt_count, cv::KMEANS_PP_CENTERS);
+      }
+
+      int* cluster_ids_ = (int*)cluster_ids.data;
+
+#ifdef VISUALIZE
+      for (uint& cid : foreground_cluster_ids) {
+        cid = 0;
+      }
+      for (uint i = 0; i < foreground_mv_field_indices_.size(); ++i) {
+        uint j = foreground_mv_field_indices_[i];
+        foreground_cluster_ids[j] = cluster_ids_[i] + BLOCK_TYPE_BACKGROUND + 1;
+      }
+      DrawVecFieldLayerClusters(
+          foreground_cluster_ids.data(), BLOCK_TYPE_BACKGROUND + 1,
+          foreground_mv_field_indices_.data(),
+          foreground_mv_field_indices_.size(), mv_field_w_, mv_field_h_,
+          cfg_.mv_block_w, cfg_.mv_block_h, &foreground_clusters_view);
+#endif  // VISUALIZE
+
+      uint block_type_offset = BLOCK_TYPE_BACKGROUND;
+      for (uint cid = 0; cid < cluster_count; ++cid) {
+        foreground_cluster_mask_ = cv::Mat1b::zeros(mv_field_h_, mv_field_w_);
+
+        for (uint i = 0; i < foreground_mv_field_indices_.size(); ++i) {
+          if (cluster_ids_[i] == cid) {
+            uint j = foreground_mv_field_indices_[i];
+            foreground_cluster_mask_.data[j] = 255;
+          }
+        }
+
+        cv::Mat1i conn_comp_ids;
+        uint conn_comp_id_count = cv::connectedComponents(
+            foreground_cluster_mask_, conn_comp_ids,
+            cfg_.connected_components_connectivity, CV_32S,
+            cv::ConnectedComponentsAlgorithmsTypes::CCL_DEFAULT);
+
+        int* conn_comp_ids_ = (int*)conn_comp_ids.data;
+        for (uint i : foreground_mv_field_indices_) {
+          if (conn_comp_ids_[i] == 0) {
+            continue;
+          }
+          mv_field_block_types_[i] = conn_comp_ids_[i] + block_type_offset;
+        }
+
+        block_type_offset += conn_comp_id_count;
+      }
+    }
+
+#ifdef VISUALIZE
+    DrawViewTitle(&foreground_clusters_view, "FG Clusters", &vtt_params);
+
+    padded_frame_.copyTo(foreground_regions_view);
+    DrawVecFieldLayerClusters(
+        mv_field_block_types_.data(), BLOCK_TYPE_BACKGROUND + 1,
+        foreground_mv_field_indices_.data(),
+        foreground_mv_field_indices_.size(), mv_field_w_, mv_field_h_,
+        cfg_.mv_block_w, cfg_.mv_block_h, &foreground_regions_view);
+    DrawViewTitle(&foreground_regions_view, "FG Regions", &vtt_params);
+#endif  // VISUALIZE
+
+    padded_frame_.convertTo(padded_frame_float, CV_32FC3);
+    Dct(&padded_frame_float, cfg_.transform_block_w, cfg_.transform_block_h,
+        &dct_coeffs);
+
+    std::vector<cv::Mat1f> dct_coeffs_copy(dct_coeffs.size());
+    for (decltype(dct_coeffs)::size_type i = 0; i < dct_coeffs.size(); ++i) {
+      dct_coeffs_copy[i] = dct_coeffs[i].clone();
+    }
+
+    std::vector<uchar> bytes = SerializeEncodedFrame(
+        &dct_coeffs_copy, &mv_field_block_types_, vidprops_.frame_w,
+        vidprops_.frame_h, cfg_.transform_block_w, cfg_.transform_block_h,
+        mv_field_w_, mv_field_h_, cfg_.mv_block_w, cfg_.mv_block_h);
+
+    outqueue.Push(std::move(bytes));
+
+#ifdef VISUALIZE
+    cv::imshow(kWindowName, window_views);
+    if (cv::waitKey(1) >= 0) {
+      break;
+    }
+#endif  // VISUALIZE
+
+    prev_pyr_.swap(pyr_);
+    prev_pyr_data_.swap(pyr_data_);
+    cv::swap(prev_y_padded_frame_, y_padded_frame_);
+  }
+
+  shared_writer_data_.encoder_is_done = true;
+
+#ifdef VISUALIZE
+  cv::destroyAllWindows();
+#endif  // VISUALIZE
+}
 
 /*******************************************************************************
  * Default Config Values    #default-cfg
@@ -201,82 +775,6 @@ static Status Validate(EncoderConfig* cfg) {
   return kStatus_Ok;
 }
 
-static void InitEncoder(Encoder* enc, EncoderConfig* cfg) {
-  assert(enc);
-  assert(cfg);
-
-  enc->cfg = *cfg;
-
-  // The notation a|b denotes a divides b.
-  // Theorem: If a|b and b|c, then a|c.
-  //
-  // Therefore, if the MV block width and height are divisible by the
-  // transform block width and height, respectively, and the frame width
-  // and height are made divisible by the MV block width and height,
-  // respectively, then the frame width and height are also divisible by the
-  // transform block width and height. That's why there's no need to
-  // involve the transform block dimensions in these calculations. So
-  // long as the MV block width and height are divisible by the
-  // transform block width and height, we're good. Validation of
-  // configuration ensures this.
-  uint top_lvl_reduction_factor = Pow2(cfg->pyr_lvl_count - 1);
-  enc->padded_frame_w = ClosestLargerDivisible(cfg->frame_w, cfg->mv_block_w,
-                                               top_lvl_reduction_factor);
-  enc->padded_frame_h = ClosestLargerDivisible(cfg->frame_h, cfg->mv_block_h,
-                                               top_lvl_reduction_factor);
-
-  enc->frame_excess_w = enc->padded_frame_w - enc->cfg.frame_w;
-  enc->frame_excess_h = enc->padded_frame_h - enc->cfg.frame_h;
-
-  enc->mv_field_w = enc->padded_frame_w / cfg->mv_block_w;
-  enc->mv_field_h = enc->padded_frame_h / cfg->mv_block_h;
-
-  uint mv_field_sz = enc->mv_field_w * enc->mv_field_h;
-
-  enc->mv_field.resize(mv_field_sz);
-  enc->mv_field_min_mad.resize(mv_field_sz);
-
-  enc->foreground_mv_field_mask = cv::Mat1b(enc->mv_field_h, enc->mv_field_w);
-  enc->foreground_mv_field_indices.reserve(mv_field_sz);
-  enc->foreground_mv_features.reserve(mv_field_sz);
-  enc->mv_field_block_types.resize(mv_field_sz);
-
-  enc->foreground_cluster_mask(enc->mv_field_h, enc->mv_field_w);
-
-  enc->morph_rect = cv::getStructuringElement(
-      cv::MORPH_RECT, cv::Size(enc->cfg.morph_rect_w, enc->cfg.morph_rect_h));
-
-  enc->padded_frame = cv::Mat3b(enc->padded_frame_h, enc->padded_frame_w);
-  enc->yuv_padded_frame = cv::Mat3b(enc->padded_frame_h, enc->padded_frame_w);
-  enc->prev_y_padded_frame =
-      cv::Mat1b(enc->padded_frame_h, enc->padded_frame_w);
-  enc->y_padded_frame = cv::Mat1b(enc->padded_frame_h, enc->padded_frame_w);
-
-  enc->prev_pyr.resize(cfg->pyr_lvl_count);
-  enc->prev_pyr_data.resize(cfg->pyr_lvl_count);
-  enc->pyr.resize(cfg->pyr_lvl_count);
-  enc->pyr_data.resize(cfg->pyr_lvl_count);
-
-  enc->prev_pyr[0] = enc->prev_y_padded_frame;
-  enc->prev_pyr_data[0] = enc->prev_pyr[0].data;
-  enc->pyr[0] = enc->y_padded_frame;
-  enc->pyr_data[0] = enc->pyr[0].data;
-  {
-    uint w = enc->padded_frame_w / 2;
-    uint h = enc->padded_frame_h / 2;
-    for (uint i = 1; i < cfg->pyr_lvl_count; ++i) {
-      enc->prev_pyr[i] = cv::Mat1b(h, w);
-      enc->prev_pyr_data[i] = enc->prev_pyr[i].data;
-
-      enc->pyr[i] = cv::Mat1b(h, w);
-      enc->pyr_data[i] = enc->pyr[i].data;
-
-      w /= 2;
-      h /= 2;
-    }
-  }
-}
-
 static void DefaultInit(Config* c) {
   assert(c);
 
@@ -346,217 +844,68 @@ static Status ParseConfig(uint argc, char* argv[], Config* c) {
   return kStatus_Ok;
 }
 
-static void BuildMvFeatures(const Vec2f* mv_field, uint mv_field_w,
-                            uint mv_block_w, uint mv_block_h,
-                            const uint* mv_field_indices,
-                            uint mv_field_indices_sz, Vec4f* features) {
-  assert(mv_field);
-  assert(features);
-  assert(mv_field_w > 0);
-  assert(mv_field_indices_sz == 0 || mv_field_indices);
+// static Status WriteEncodedFrame(const std::vector<cv::Mat1f>* dct_coeffs,
+//                                 const std::vector<uint>*
+//                                 mv_field_block_types, uint frame_w, uint
+//                                 frame_h, uint transform_block_w, uint
+//                                 transform_block_h, uint mv_field_w, uint
+//                                 mv_field_h, uint mv_block_w, uint
+//                                 mv_block_h)
+//                                 {
+//   assert(dct_coeffs);
+//   assert(mv_field_block_types);
 
-  for (uint i = 0; i < mv_field_indices_sz; ++i) {
-    uint mf_i = mv_field_indices[i];
+//   assert(transform_block_h > 0);
+//   assert(transform_block_w > 0);
 
-    uint mf_y = mf_i / mv_field_w;
-    uint mf_x = mf_i % mv_field_w;
+//   assert(frame_w % transform_block_h == 0);
+//   assert(frame_h % transform_block_w == 0);
 
-    uint y = mf_y * mv_block_h;
-    uint x = mf_x * mv_block_w;
+//   assert(mv_field_w * mv_field_h == mv_field_block_types->size());
 
-    Vec2f m = mv_field[mf_i];
+//   assert(transform_block_h <= mv_block_w);
+//   assert(transform_block_w <= mv_block_h);
 
-    features[i][0] = m.x;
-    features[i][1] = m.y;
-    features[i][1] = x;
-    features[i][2] = y;
-  }
-}
+//   assert(mv_block_h % transform_block_w == 0);
+//   assert(mv_block_w % transform_block_h == 0);
 
-static void InitHeader(Header* h, Encoder* e, uint frame_count,
-                       uint channel_count) {
-  assert(h);
-  assert(e);
+//   Status res = kStatus_IoError;
 
-  h->frame_count = frame_count;
-  h->frame_w = e->cfg.frame_w;
-  h->frame_h = e->cfg.frame_h;
-  h->frame_excess_w = e->padded_frame_w - e->cfg.frame_w;
-  h->frame_excess_h = e->padded_frame_h - e->cfg.frame_h;
-  h->transform_block_w = e->cfg.transform_block_w;
-  h->transform_block_h = e->cfg.transform_block_h;
-  h->channel_count = channel_count;
-}
+//   for (uint tb_y = 0; tb_y < frame_h; tb_y += transform_block_h) {
+//     for (uint tb_x = 0; tb_x < frame_w; tb_x += transform_block_w) {
+//       uint mv_field_y = tb_y / mv_block_h;
+//       uint mv_field_x = tb_x / mv_block_w;
+//       uint mv_field_i = mv_field_y * mv_field_w + mv_field_x;
 
-static void Dct(const cv::Mat3f* frame, uint block_w, uint block_h,
-                std::vector<cv::Mat1f>* coeffs) {
-  assert(frame);
-  assert(coeffs);
+//       uint btype = (*mv_field_block_types)[mv_field_i];
 
-  assert(block_h > 0);
-  assert(block_w > 0);
+//       uint count = std::fwrite(&btype, sizeof(btype), 1, stdout);
+//       if (count < 1) {
+//         std::fprintf(stderr, "Failed to write block type.\n");
+//         return res;
+//       }
 
-  cv::split(*frame, *coeffs);
+//       for (const auto& channel : (*dct_coeffs)) {
+//         float* coeffs = (float*)channel.data;
 
-  for (const cv::Mat1f& channel : *coeffs) {
-    for (uint y = 0; y < frame->rows; y += block_h) {
-      for (uint x = 0; x < frame->cols; x += block_w) {
-        cv::Rect roi(x, y, block_w, block_h);
-        cv::Mat1f block = channel(roi);
-        cv::dct(block, block);
-      }
-    }
-  }
-}
+//         for (uint y = tb_y; y < tb_y + transform_block_w; ++y) {
+//           float* row = &coeffs[y * frame_w + tb_x];
 
-static Status WriteEncodedFrame(const std::vector<cv::Mat1f>* dct_coeffs,
-                                const std::vector<uint>* mv_field_block_types,
-                                uint frame_w, uint frame_h,
-                                uint transform_block_w, uint transform_block_h,
-                                uint mv_field_w, uint mv_field_h,
-                                uint mv_block_w, uint mv_block_h) {
-  assert(dct_coeffs);
-  assert(mv_field_block_types);
+//           uint count =
+//               std::fwrite(row, sizeof(float), transform_block_h, stdout);
+//           if (count < transform_block_h) {
+//             std::fprintf(stderr, "Failed to write DCT coefficients.\n");
+//             return res;
+//           }
+//         }
+//       }
+//     }
+//   }
 
-  assert(transform_block_h > 0);
-  assert(transform_block_w > 0);
+//   res = kStatus_Ok;
 
-  assert(frame_w % transform_block_h == 0);
-  assert(frame_h % transform_block_w == 0);
-
-  assert(mv_field_w * mv_field_h == mv_field_block_types->size());
-
-  assert(transform_block_h <= mv_block_w);
-  assert(transform_block_w <= mv_block_h);
-
-  assert(mv_block_h % transform_block_w == 0);
-  assert(mv_block_w % transform_block_h == 0);
-
-  Status res = kStatus_IoError;
-
-  for (uint tb_y = 0; tb_y < frame_h; tb_y += transform_block_w) {
-    for (uint tb_x = 0; tb_x < frame_w; tb_x += transform_block_h) {
-      uint mv_field_y = tb_y / mv_block_h;
-      uint mv_field_x = tb_x / mv_block_w;
-      uint mv_field_i = mv_field_y * mv_field_w + mv_field_x;
-
-      uint btype = (*mv_field_block_types)[mv_field_i];
-
-      uint count = std::fwrite(&btype, sizeof(btype), 1, stdout);
-      if (count < 1) {
-        std::fprintf(stderr, "Failed to write block type.\n");
-        return res;
-      }
-
-      for (const cv::Mat1f& channel : (*dct_coeffs)) {
-        float* coeffs = (float*)channel.data;
-
-        for (uint y = tb_y; y < tb_y + transform_block_w; ++y) {
-          float* row = &coeffs[y * frame_w + tb_x];
-
-          uint count =
-              std::fwrite(row, sizeof(float), transform_block_h, stdout);
-          if (count < transform_block_h) {
-            std::fprintf(stderr, "Failed to write DCT coefficients.\n");
-            return res;
-          }
-        }
-      }
-    }
-  }
-
-  res = kStatus_Ok;
-
-  return res;
-}
-
-#ifdef VISUALIZE
-const char* kWindowName = "Encoding";
-
-struct ViewTitleTextParams {
-  cv::Scalar outline_color;
-  cv::Scalar fill_color;
-  cv::HersheyFonts font;
-  float font_scale_factor;
-  cv::Point2i origin;
-  cv::LineTypes line_type;
-  float line_thickness_scale_factor;
-};
-
-static void DrawViewTitle(cv::Mat* frame, const char* text,
-                          ViewTitleTextParams* params) {
-  assert(frame);
-  assert(text);
-  assert(params);
-
-  DrawOutlinedText(frame, text, params->origin, params->outline_color,
-                   params->fill_color, params->font, params->font_scale_factor,
-                   params->line_thickness_scale_factor, params->line_type);
-}
-#endif  // VISUALIZE
-
-struct Read {
-  cv::VideoCapture& vidcap;
-  CircularQueue<cv::Mat3b>& queue;
-  std::atomic<bool>& done_reading;
-  std::condition_variable& attempted_to_read_first_frame;
-
-  void operator()() const {
-    cv::Mat3b frame;
-
-    if (!vidcap.read(frame)) {
-      done_reading = true;
-      attempted_to_read_first_frame.notify_one();
-      return;
-    }
-
-    queue.Push(frame);
-    attempted_to_read_first_frame.notify_one();
-
-    while (vidcap.read(frame)) {
-      queue.Push(frame);
-    }
-    done_reading = true;
-  }
-};
-
-struct EncodedFrame {
-  std::vector<cv::Mat1f> dct_coeffs;
-  std::vector<uint> mv_field_block_types;
-};
-
-struct Write {
-  CircularQueue<EncodedFrame>& queue;
-  std::atomic<bool>& done_reading;
-  uint padded_frame_w;
-  uint padded_frame_h;
-  uint transform_block_w;
-  uint transform_block_h;
-  uint mv_field_w;
-  uint mv_field_h;
-  uint mv_block_w;
-  uint mv_block_h;
-
-  void operator()() const {
-    while (!done_reading || !queue.IsEmpty()) {
-      auto frame = queue.Pop();
-      Status st = WriteEncodedFrame(
-          &frame.dct_coeffs, &frame.mv_field_block_types, padded_frame_w,
-          padded_frame_h, transform_block_w, transform_block_h, mv_field_w,
-          mv_field_h, mv_block_w, mv_block_h);
-      if (st != kStatus_Ok) {
-        throw std::runtime_error{"Failed to write encoded frame"};
-      }
-    }
-  }
-};
-
-#ifdef VISUALIZE
-static void Encode(Encoder* enc, CircularQueue<cv::Mat1b>& in_frames);
-#else
-static void Encode(Encoder* enc, CircularQueue<cv::Mat1b>& in_frames,
-                   CircularQueue<EncodedFrame> out_frames);
-#endif  // VISUALIZE
+//   return res;
+// }
 
 int main(int argc, char* argv[]) {
   Config cfg;
@@ -569,16 +918,10 @@ int main(int argc, char* argv[]) {
   }
 
   cv::VideoCapture vidcap(cfg.video_path);
-
   if (!vidcap.isOpened()) {
     std::fprintf(stderr, "Failed to initialize video capturing.\n");
     return EXIT_FAILURE;
   }
-
-  cfg.encoder.frame_w =
-      vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_WIDTH);
-  cfg.encoder.frame_h =
-      vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_HEIGHT);
 
   status = Validate(&cfg.encoder);
   if (status != kStatus_Ok) {
@@ -586,374 +929,39 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
-  uint frame_count =
-      vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_COUNT);
+  VideoProperties vidprops{
+      static_cast<uint>(
+          vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_WIDTH)),
+      static_cast<uint>(
+          vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_HEIGHT)),
+      static_cast<uint>(
+          vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_COUNT))};
 
   if (cfg.verbose) {
     std::fprintf(stderr, "Video properties:\n");
-    std::fprintf(stderr, "  Width: %u\n", cfg.encoder.frame_w);
-    std::fprintf(stderr, "  Height: %u\n", cfg.encoder.frame_h);
-    std::fprintf(stderr, "  Frame count: %u\n", frame_count);
+    std::fprintf(stderr, "  Width: %u\n", vidprops.frame_w);
+    std::fprintf(stderr, "  Height: %u\n", vidprops.frame_h);
+    std::fprintf(stderr, "  Frame count: %u\n", vidprops.frame_count);
   }
 
-  Encoder enc;
-  InitEncoder(&enc, &cfg.encoder);
+  std::promise<void> attempted_first_frame_read_promise;
+  auto attempted_first_frame_read_future =
+      attempted_first_frame_read_promise.get_future();
 
-  std::atomic<bool> done_reading;
-  std::condition_variable attempted_to_read_first_frame;
-  std::mutex attempted_to_read_first_frame_mutex;
+  Reader reader{vidcap, shared_reader_encoder_data,
+                std::move(attempted_first_frame_read_promise)};
 
-  CircularQueue<cv::Mat3b> read_queue{10};
-  Read read{vidcap, read_queue, done_reading, attempted_to_read_first_frame};
+  Encoder encoder{cfg.encoder, vidprops, shared_reader_encoder_data,
+                  std::move(attempted_first_frame_read_future),
+                  shared_writer_encoder_data};
 
-  std::vector<IJThread> threads;
-  threads.push_back(IJThread{read});
+  Writer writer{shared_writer_encoder_data};
 
-  {
-    std::unique_lock<std::mutex> lock{attempted_to_read_first_frame_mutex};
-    attempted_to_read_first_frame.wait(lock, [&done_reading, &read_queue]() {
-      return done_reading || !read_queue.IsEmpty();
-    });
-  }
+  std::thread read_thread{std::move(reader)};
+  // std::thread encode_thread{std::move(encoder)};
+  std::thread write_thread{std::move(writer)};
+  ThreadGuard rtg{read_thread};
+  ThreadGuard wtg{write_thread};
 
-  if (read_queue.IsEmpty()) {
-    // Because of the statements in the prior block, empty read queue implies
-    // reading is done, and so read thread is done.
-    assert(done_reading);
-
-    std::fprintf(stderr, "No frames in video file.\n");
-    return EXIT_SUCCESS;
-  }
-
-  cv::Mat3b frame = read_queue.Pop();
-
-#ifndef VISUALIZE
-  std::vector<cv::Mat1f> dct_coeffs(frame.channels());
-  for (auto& channel : dct_coeffs) {
-    channel = cv::Mat1f(enc.padded_frame_h, enc.padded_frame_w);
-  }
-  cv::Mat3f padded_frame_float(enc.padded_frame_h, enc.padded_frame_w);
-
-  {
-    Header header;
-    // TODO: Support I-frames
-    // First frame is not included in the encoded video. It is used as a
-    // tracked frame and not an anchor frame.
-    if (frame_count > 0) {
-      --frame_count;
-    }
-    InitHeader(&header, &enc, frame_count, frame.channels());
-
-    uint count = std::fwrite(&header, sizeof(header), 1, stdout);
-    if (count < 1) {
-      std::fprintf(stderr, "Failed to write header.\n");
-      threads.back().Interrupt();
-      return EXIT_FAILURE;
-    }
-  }
-#endif  // NOT VISUALIZE
-
-#ifndef VISUALIZE
-  CircularQueue<EncodedFrame> write_queue{10};
-  auto write = Write{write_queue,
-                     done_reading,
-                     enc.padded_frame_w,
-                     enc.padded_frame_h,
-                     enc.cfg.transform_block_w,
-                     enc.cfg.transform_block_h,
-                     enc.mv_field_w,
-                     enc.mv_field_h,
-                     enc.cfg.mv_block_w,
-                     enc.cfg.mv_block_h};
-  threads.push_back(IJThread{write});
-#endif  // VISUALIZE
-
-  InterruptGuard interrupt_guard{std::move(threads)};
-
-#ifdef VISUALIZE
-  //---------------------------------------------------------------------------
-  // ALLOCATE WINDOW VIEWS AND OTHER VISUALIZATION-RELATED DATA STRUCTURES
-  //---------------------------------------------------------------------------
-  cv::Mat3b window_views;
-  // window row 1
-  cv::Mat3b pyr_base_view;
-  cv::Mat3b motion_field_view;
-  cv::Mat3b global_motion_view;
-  // window row 2
-  cv::Mat3b foreground_mask_view;
-  cv::Mat3b foreground_mask_after_morph_view;
-  cv::Mat3b foreground_clusters_view;
-  // window row 3
-  cv::Mat3b foreground_regions_view;
-  {
-    int w = enc.padded_frame_w;
-    int h = enc.padded_frame_h;
-
-    window_views = cv::Mat3b(h * 3, w * 3);
-
-    cv::Rect r(cv::Point2i(0, 0), cv::Size2i(w, h));
-    pyr_base_view = window_views(r);
-    motion_field_view = window_views(r + cv::Point2i(w, 0));
-    global_motion_view = window_views(r + cv::Point2i(w * 2, 0));
-
-    r.y = h;
-    foreground_mask_view = window_views(r);
-    foreground_mask_after_morph_view = window_views(r + cv::Point2i(w, 0));
-    foreground_clusters_view = window_views(r + cv::Point2i(w * 2, 0));
-
-    r.y = 2 * h;
-    foreground_regions_view = window_views(r);
-  }
-
-  cv::Mat1b foreground_mask_frame(enc.padded_frame_h, enc.padded_frame_w);
-  cv::Mat3b foreground_cluster_frame(enc.mv_field_h, enc.mv_field_w);
-  cv::Mat3b foreground_regions_frame(enc.mv_field_h, enc.mv_field_w);
-
-  std::vector<uint> foreground_cluster_ids(enc.mv_field.size());
-
-  cv::namedWindow(kWindowName);
-
-  ArrowedLineParams line_params;
-  DefaultInit(&line_params);
-
-  ViewTitleTextParams vtt_params;
-  vtt_params.outline_color = cv::Scalar(0, 0, 0);
-  vtt_params.fill_color = cv::Scalar(255, 255, 255);
-  vtt_params.font = cv::HersheyFonts::FONT_HERSHEY_COMPLEX;
-  vtt_params.font_scale_factor =
-      (1.0f / 640.0f) * Min(enc.padded_frame_w, enc.padded_frame_h);
-  {
-    float text_origin_scale_factor = 2 * vtt_params.font_scale_factor;
-    vtt_params.origin = cv::Point2i(8, 16);
-    vtt_params.origin.x =
-        RoundFloatToInt(vtt_params.origin.x * text_origin_scale_factor);
-    vtt_params.origin.y =
-        RoundFloatToInt(vtt_params.origin.y * text_origin_scale_factor);
-  }
-  vtt_params.line_type = cv::LineTypes::LINE_AA;
-  vtt_params.line_thickness_scale_factor = vtt_params.font_scale_factor;
-#endif  // VISUALIZE
-
-  cv::copyMakeBorder(frame, enc.padded_frame, 0, enc.frame_excess_h, 0,
-                     enc.frame_excess_w, cv::BORDER_CONSTANT,
-                     cv::Scalar(0, 0, 0));
-  cv::cvtColor(enc.padded_frame, enc.yuv_padded_frame, cv::COLOR_BGR2YUV);
-  cv::extractChannel(enc.yuv_padded_frame, enc.prev_y_padded_frame, 0);
-  cv::buildPyramid(enc.prev_y_padded_frame, enc.prev_pyr,
-                   enc.cfg.pyr_lvl_count - 1);
-
-  while (!done_reading || !read_queue.IsEmpty()) {
-    frame = read_queue.Pop();
-    cv::copyMakeBorder(frame, enc.padded_frame, 0, enc.frame_excess_h, 0,
-                       enc.frame_excess_w, cv::BORDER_CONSTANT,
-                       cv::Scalar(0, 0, 0));
-
-#ifdef VISUALIZE
-    enc.padded_frame.copyTo(pyr_base_view);
-    DrawViewTitle(&pyr_base_view, "Base", &vtt_params);
-#endif  // VISUALIZE
-
-    cv::cvtColor(enc.padded_frame, enc.yuv_padded_frame, cv::COLOR_BGR2YUV);
-    cv::extractChannel(enc.yuv_padded_frame, enc.y_padded_frame, 0);
-    cv::buildPyramid(enc.y_padded_frame, enc.pyr, enc.cfg.pyr_lvl_count - 1);
-
-#if defined(__SSE2__) && defined(SVC_MOTION_SSE2)
-    EstimateMotionHierarchical16x16Sse2(
-        enc.prev_pyr_data.data(), enc.pyr_data.data(), enc.padded_frame_w,
-        enc.padded_frame_h, enc.cfg.mv_search_range, enc.mv_field.data(),
-        enc.mv_field_min_mad.data());
-#else
-    EstimateMotionHierarchical(
-        enc.prev_pyr_data.data(), enc.pyr_data.data(), enc.cfg.pyr_lvl_count,
-        enc.padded_frame_w, enc.padded_frame_h, enc.cfg.mv_search_range,
-        enc.cfg.mv_block_w, enc.cfg.mv_block_h, enc.mv_field.data(),
-        enc.mv_field_min_mad.data());
-#endif
-
-#ifdef VISUALIZE
-    enc.padded_frame.copyTo(motion_field_view);
-    DrawMotionField(enc.mv_field.data(), enc.cfg.mv_block_w, enc.cfg.mv_block_h,
-                    &line_params, &motion_field_view);
-    DrawViewTitle(&motion_field_view, "Motion Field (MF)", &vtt_params);
-#endif  // VISUALIZE
-
-    Vec2f global_motion;
-    std::vector<uint> background_mv_field_indices;
-    {
-      float rmse;
-      EstimateGlobalMotionRansac(enc.mv_field.data(), enc.mv_field.size(),
-                                 enc.cfg.ransac, &rmse, &global_motion,
-                                 &background_mv_field_indices);
-    }
-
-#ifdef VISUALIZE
-    enc.padded_frame.copyTo(global_motion_view);
-    DrawMotionVecAsField(global_motion, enc.cfg.mv_block_w, enc.cfg.mv_block_h,
-                         &line_params, &global_motion_view);
-    DrawViewTitle(&global_motion_view, "Global Motion (GM)", &vtt_params);
-#endif  // VISUALIZE
-
-    enc.foreground_mv_field_mask =
-        cv::Mat1b::ones(enc.mv_field_h, enc.mv_field_w) * 255;
-    {
-      uchar* fg_mask = enc.foreground_mv_field_mask.ptr<uchar>();
-      for (uint i : background_mv_field_indices) {
-        fg_mask[i] = 0;
-      }
-    }
-
-#ifdef VISUALIZE
-    cv::resize(enc.foreground_mv_field_mask, foreground_mask_frame,
-               foreground_mask_frame.size(), 0, 0, cv::INTER_NEAREST_EXACT);
-    cv::cvtColor(foreground_mask_frame, foreground_mask_view,
-                 cv::COLOR_GRAY2BGR);
-    DrawViewTitle(&foreground_mask_view, "Foreground (FG) Mask", &vtt_params);
-#endif  // VISUALIZE
-
-    // improve spatial connectivity of foreground mask
-    cv::morphologyEx(enc.foreground_mv_field_mask, enc.foreground_mv_field_mask,
-                     cv::MORPH_CLOSE, enc.morph_rect);
-    cv::morphologyEx(enc.foreground_mv_field_mask, enc.foreground_mv_field_mask,
-                     cv::MORPH_OPEN, enc.morph_rect);
-
-#ifdef VISUALIZE
-    cv::resize(enc.foreground_mv_field_mask, foreground_mask_frame,
-               foreground_mask_frame.size(), 0, 0, cv::INTER_NEAREST_EXACT);
-    cv::cvtColor(foreground_mask_frame, foreground_mask_after_morph_view,
-                 cv::COLOR_GRAY2BGR);
-    DrawViewTitle(&foreground_mask_after_morph_view, "FG Mask After Morph",
-                  &vtt_params);
-#endif  // VISUALIZE
-
-    enc.foreground_mv_field_indices.clear();
-
-    {
-      uchar* fg_mask = enc.foreground_mv_field_mask.ptr<uchar>();
-      for (uint i = 0; i < enc.mv_field.size(); ++i) {
-        if (fg_mask[i] == 255) {
-          enc.foreground_mv_field_indices.push_back(i);
-        }
-      }
-    }
-
-    for (uint& t : enc.mv_field_block_types) {
-      t = BLOCK_TYPE_BACKGROUND;
-    }
-
-#ifdef VISUALIZE
-    enc.padded_frame.copyTo(foreground_clusters_view);
-#endif  // VISUALIZE
-
-    if (!enc.foreground_mv_field_indices.empty()) {
-      uint cluster_count = Min(enc.cfg.kmeans.cluster_count,
-                               enc.foreground_mv_field_indices.size());
-
-      cv::Mat1i cluster_ids;
-      {
-        enc.foreground_mv_features.resize(
-            enc.foreground_mv_field_indices.size());
-        BuildMvFeatures(enc.mv_field.data(), enc.mv_field_w, enc.cfg.mv_block_w,
-                        enc.cfg.mv_block_h,
-                        enc.foreground_mv_field_indices.data(),
-                        enc.foreground_mv_field_indices.size(),
-                        enc.foreground_mv_features.data());
-        cv::Mat4f fg_mv_features(enc.foreground_mv_features.size(), 1,
-                                 (cv::Vec4f*)enc.foreground_mv_features.data());
-
-        cv::TermCriteria term_crit(
-            cv::TermCriteria::COUNT | cv::TermCriteria::EPS,
-            enc.cfg.kmeans.max_iter_count, enc.cfg.kmeans.epsilon);
-
-        cv::kmeans(fg_mv_features, cluster_count, cluster_ids, term_crit,
-                   enc.cfg.kmeans.attempt_count, cv::KMEANS_PP_CENTERS);
-      }
-
-      int* cluster_ids_ = (int*)cluster_ids.data;
-
-#ifdef VISUALIZE
-      for (uint& cid : foreground_cluster_ids) {
-        cid = 0;
-      }
-      for (uint i = 0; i < enc.foreground_mv_field_indices.size(); ++i) {
-        uint j = enc.foreground_mv_field_indices[i];
-        foreground_cluster_ids[j] = cluster_ids_[i] + BLOCK_TYPE_BACKGROUND + 1;
-      }
-      DrawVecFieldLayerClusters(
-          foreground_cluster_ids.data(), BLOCK_TYPE_BACKGROUND + 1,
-          enc.foreground_mv_field_indices.data(),
-          enc.foreground_mv_field_indices.size(), enc.mv_field_w,
-          enc.mv_field_h, enc.cfg.mv_block_w, enc.cfg.mv_block_h,
-          &foreground_clusters_view);
-#endif  // VISUALIZE
-
-      uint block_type_offset = BLOCK_TYPE_BACKGROUND;
-      for (uint cid = 0; cid < cluster_count; ++cid) {
-        enc.foreground_cluster_mask =
-            cv::Mat1b::zeros(enc.mv_field_h, enc.mv_field_w);
-
-        for (uint i = 0; i < enc.foreground_mv_field_indices.size(); ++i) {
-          if (cluster_ids_[i] == cid) {
-            uint j = enc.foreground_mv_field_indices[i];
-            enc.foreground_cluster_mask.data[j] = 255;
-          }
-        }
-
-        cv::Mat1i conn_comp_ids;
-        uint conn_comp_id_count = cv::connectedComponents(
-            enc.foreground_cluster_mask, conn_comp_ids,
-            enc.cfg.connected_components_connectivity, CV_32S,
-            cv::ConnectedComponentsAlgorithmsTypes::CCL_DEFAULT);
-
-        int* conn_comp_ids_ = (int*)conn_comp_ids.data;
-        for (uint i : enc.foreground_mv_field_indices) {
-          if (conn_comp_ids_[i] == 0) {
-            continue;
-          }
-          enc.mv_field_block_types[i] = conn_comp_ids_[i] + block_type_offset;
-        }
-
-        block_type_offset += conn_comp_id_count;
-      }
-    }
-
-#ifdef VISUALIZE
-    DrawViewTitle(&foreground_clusters_view, "FG Clusters", &vtt_params);
-
-    enc.padded_frame.copyTo(foreground_regions_view);
-    DrawVecFieldLayerClusters(
-        enc.mv_field_block_types.data(), BLOCK_TYPE_BACKGROUND + 1,
-        enc.foreground_mv_field_indices.data(),
-        enc.foreground_mv_field_indices.size(), enc.mv_field_w, enc.mv_field_h,
-        enc.cfg.mv_block_w, enc.cfg.mv_block_h, &foreground_regions_view);
-    DrawViewTitle(&foreground_regions_view, "FG Regions", &vtt_params);
-#endif  // VISUALIZE
-
-#ifndef VISUALIZE
-    enc.padded_frame.convertTo(padded_frame_float, CV_32FC3);
-    Dct(&padded_frame_float, enc.cfg.transform_block_w,
-        enc.cfg.transform_block_h, &dct_coeffs);
-
-    std::vector<cv::Mat1f> dct_coeffs_copy(dct_coeffs.size());
-    for (std::vector<int>::size_type i = 0; i < dct_coeffs.size(); ++i) {
-      dct_coeffs_copy[i] = dct_coeffs[i].clone();
-    }
-
-    write_queue.Push({dct_coeffs_copy, enc.mv_field_block_types});
-#endif  // NOT VISUALIZE
-
-#ifdef VISUALIZE
-    cv::imshow(kWindowName, window_views);
-    if (cv::waitKey(1) >= 0) {
-      break;
-    }
-#endif  // VISUALIZE
-
-    enc.prev_pyr.swap(enc.pyr);
-    enc.prev_pyr_data.swap(enc.pyr_data);
-    cv::swap(enc.prev_y_padded_frame, enc.y_padded_frame);
-  }
-
-#ifdef VISUALIZE
-  cv::destroyAllWindows();
-#endif  // VISUALIZE
+  encoder();
 }
