@@ -53,19 +53,20 @@ Decoder::Decoder(const DecoderConfig& cfg, const Header& header,
 static void OnMouse(int event, int x, int y, int flags, void* mouse_position) {
   switch (event) {
     case cv::EVENT_MOUSEMOVE: {
-      SharedVec2& pos = *static_cast<SharedVec2*>(mouse_position);
-      std::unique_lock lock(pos.mutex);
-      pos.x = x;
-      pos.y = y;
+      auto pos = static_cast<SharedVec2*>(mouse_position);
+      std::unique_lock lk{pos->mutex};
+      pos->x = x;
+      pos->y = y;
       break;
     }
   }
 }
 
-static cv::Rect2i CalcWithinFrameRectFromCenter(cv::Point2i center,
-                                                uint max_rect_w,
-                                                uint max_rect_h, uint frame_w,
-                                                uint frame_h) {
+static cv::Rect_<uint> CalcWithinFrameRectFromCenter(cv::Point_<uint> center,
+                                                     uint max_rect_w,
+                                                     uint max_rect_h,
+                                                     uint frame_w,
+                                                     uint frame_h) {
   // TODO: add more assertions
   assert(center.x >= 0);
   assert(center.x < frame_w);
@@ -89,18 +90,12 @@ static cv::Rect2i CalcWithinFrameRectFromCenter(cv::Point2i center,
     half_h = center.y;
   }
 
-  cv::Point2i tl;
-  tl.x = center.x - half_w;
-  tl.y = center.y - half_h;
+  cv::Point_<uint> tl{center.x - half_w, center.y - half_h};
+  cv::Point_<uint> br{center.x + half_w, center.y + half_h};
 
-  uint br_x = center.x + half_w;
-  uint br_y = center.y + half_h;
+  cv::Size_<uint> sz{br.x - tl.x, br.y - tl.y};
 
-  cv::Size2i size;
-  size.width = br_x - tl.x;
-  size.height = br_y - tl.y;
-
-  cv::Rect2i result(tl, size);
+  cv::Rect_<uint> result{tl, sz};
   return result;
 }
 
@@ -110,7 +105,8 @@ static void ParseBlock(const std::vector<std::byte>& raw_block,
 #ifndef NDEBUG
   uint blk_area_per_channel = block_w * block_h;
   uint blk_area = blk_area_per_channel * channel_count;
-  uint size = sizeof(uint) + sizeof(float) * blk_area;
+  uint blk_type_sz = sizeof(uint);
+  uint size = blk_type_sz + sizeof(float) * blk_area;
   assert(raw_block.size() == size);
 #endif
   const uint* ptr = reinterpret_cast<const uint*>(raw_block.data());
@@ -140,6 +136,7 @@ static void DecodeBlock(Block& block, bool gazed, uint fg_quant_step,
 
   for (auto& ch : block.channels) {
     auto ch_ptr = ch.ptr<float>();
+
     for (uint i = 0; i < ch.total(); ++i) {
       ch_ptr[i] /= quant_step;
       ch_ptr[i] = std::round(ch_ptr[i]);
@@ -154,7 +151,7 @@ static void DecodeBlock(Block& block, bool gazed, uint fg_quant_step,
 void Decoder::operator()() {
   cv::namedWindow(kWindowName);
 
-  SharedVec2 mouse_pos = {};
+  SharedVec2 mouse_pos{};
   cv::setMouseCallback(kWindowName, OnMouse, &mouse_pos);
 
   uint upscaled_frame_w = header_.frame_w + header_.frame_excess_w;
@@ -175,7 +172,7 @@ void Decoder::operator()() {
     }
 
     // gaze rectangle is defined in the original frame's space
-    cv::Rect2i gaze_rect = CalcWithinFrameRectFromCenter(
+    cv::Rect_<uint> gaze_rect = CalcWithinFrameRectFromCenter(
         gaze_pos, cfg_.max_gaze_rect_w, cfg_.max_gaze_rect_h, header_.frame_w,
         header_.frame_h);
 
@@ -197,11 +194,11 @@ void Decoder::operator()() {
         ParseBlock(raw_block, header_.channel_count, header_.transform_block_w,
                    header_.transform_block_h, block);
 
-        cv::Rect roi(x, y, header_.transform_block_w,
-                     header_.transform_block_h);
+        cv::Rect_<uint> roi{x, y, header_.transform_block_w,
+                            header_.transform_block_h};
         cv::Mat3f decoded_block = upscaled_frame(roi);
 
-        bool gazed = gaze_rect.contains(cv::Point2i(x, y));
+        bool gazed = gaze_rect.contains(cv::Point_<uint>{x, y});
 
         DecodeBlock(block, gazed, cfg_.foreground_quant_step,
                     cfg_.background_quant_step, decoded_block);
