@@ -361,7 +361,7 @@ void Encoder::operator()() {
   }
 
   cv::Mat3b frame;
-  bool reader_done = !in_queue_.Pop(frame);
+  bool empty_and_reader_done = !in_queue_.Pop(frame);
 
   std::vector<cv::Mat1f> dct_coeffs(frame.channels());
   for (auto& ch : dct_coeffs) {
@@ -465,8 +465,8 @@ void Encoder::operator()() {
 
   // while (!shared_reader_data_.reader_is_done || !inqueue.IsEmpty()) {
   while (true) {
-    bool reader_done = !in_queue_.Pop(frame);
-    if (reader_done) {
+    bool empty_and_reader_done = !in_queue_.Pop(frame);
+    if (empty_and_reader_done) {
       break;
     }
 

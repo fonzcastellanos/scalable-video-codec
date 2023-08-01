@@ -30,10 +30,11 @@ if (SVC_MOTION_SSE2)
     target_compile_definitions(encoder-visualizer-lib PRIVATE SVC_MOTION_SSE2)
 endif()
 
-add_subdirectory(apps)
 
-add_executable(decoder decoder.cpp)
-target_link_libraries(decoder PRIVATE ${OpenCV_LIBS} cli)
+add_library(decoder-lib decoder.cpp)
+target_link_libraries(decoder-lib PRIVATE ${OpenCV_LIBS})
+
+add_subdirectory(apps)
 
 # add_executable(test-perf-mad test_perf_mad.cpp mad.cpp)
 

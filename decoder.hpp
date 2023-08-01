@@ -1,13 +1,13 @@
 #ifndef SCALABLE_VIDEO_CODEC_DECODER_HPP
 #define SCALABLE_VIDEO_CODEC_DECODER_HPP
 
-#include <opencv2/core/mat.hpp>
-#include <shared_mutex>
+#include <cstddef>
 #include <vector>
 
+#include "codec.hpp"
+#include "error.hpp"
+#include "queue.hpp"
 #include "types.hpp"
-
-const char* kWindowName = "Decoded Video";
 
 struct DecoderConfig {
   uint foreground_quant_step;
@@ -16,15 +16,18 @@ struct DecoderConfig {
   uint max_gaze_rect_h;
 };
 
-struct Block {
-  uint type;
-  std::vector<cv::Mat1f> channels;
-};
+Error Validate(DecoderConfig&);
 
-struct SharedVec2 {
-  int x;
-  int y;
-  std::shared_mutex mutex;
+class Decoder {
+ public:
+  Decoder(const DecoderConfig& cfg, const Header& header,
+          CircularQueue<std::vector<std::byte>>& in_blocks);
+  void operator()();
+
+ private:
+  DecoderConfig cfg_;
+  Header header_;
+  CircularQueue<std::vector<std::byte>>& in_blocks_;
 };
 
 #endif  // SCALABLE_VIDEO_CODEC_DECODER_HPP

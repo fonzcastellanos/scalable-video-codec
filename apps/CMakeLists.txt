@@ -10,3 +10,7 @@ if (SVC_MOTION_SSE2)
     target_compile_definitions(encoder PRIVATE SVC_MOTION_SSE2)
     target_compile_definitions(encoder-visualizer PRIVATE SVC_MOTION_SSE2)
 endif()
+
+add_executable(decoder decoder.cpp)
+target_link_libraries(decoder PRIVATE cli thread decoder-lib)
+target_include_directories(decoder PRIVATE ${PROJECT_SOURCE_DIR}) 

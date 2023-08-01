@@ -4,161 +4,62 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <exception>
 #include <mutex>
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <shared_mutex>
 
 #include "cli.hpp"
-#include "codec.hpp"
 #include "math.hpp"
 
-/*******************************************************************************
- * Default Config Values    #default-cfg
- *******************************************************************************/
+const char* kWindowName = "Decoded Video";
 
-static void DefaultInit(DecoderConfig* cfg) {
-  assert(cfg);
+struct Block {
+  uint type;
+  std::vector<cv::Mat1f> channels;
+};
 
-  cfg->foreground_quant_step = 1;
-  cfg->background_quant_step = 640;
-  cfg->max_gaze_rect_w = 64;
-  cfg->max_gaze_rect_h = 64;
-}
+struct SharedVec2 {
+  int x;
+  int y;
+  std::shared_mutex mutex;
+};
 
 /*******************************************************************************
  * Config Validation Functions    #cfg-validation
  *******************************************************************************/
 
-static Status Validate(DecoderConfig* cfg) {
-  assert(cfg);
-
-  if (cfg->foreground_quant_step == 0) {
-    std::fprintf(stderr, "Foreground quantization step must be > 0.\n");
-    return kStatus_InvalidParamError;
+Error Validate(DecoderConfig& c) {
+  if (c.foreground_quant_step == 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid foreground quantization step: must be > 0"};
   }
 
-  if (cfg->background_quant_step == 0) {
-    std::fprintf(stderr, "Background quantization step must be > 0.\n");
-    return kStatus_InvalidParamError;
+  if (c.background_quant_step == 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid background quantization step: must be > 0"};
   }
 
-  return kStatus_Ok;
+  return Error{ErrorCode::kOk};
 }
 
-static Status ParseConfig(uint argc, char* argv[], DecoderConfig* c) {
-  assert(argv);
-  assert(c);
+Decoder::Decoder(const DecoderConfig& cfg, const Header& header,
+                 CircularQueue<std::vector<std::byte>>& in_blocks)
+    : cfg_{cfg}, header_{header}, in_blocks_{in_blocks} {}
 
-  /*******************************************************************************
-   * Command-line Options    #options
-   *******************************************************************************/
-  cli::Opt opts[]{
-      {"foreground-quant-step", cli::kOptArgType_Uint,
-       &c->foreground_quant_step},
-      {"background-quant-step", cli::kOptArgType_Uint,
-       &c->background_quant_step},
-      {"max-gaze-rect-w", cli::kOptArgType_Uint, &c->max_gaze_rect_w},
-      {"max-gaze-rect-h", cli::kOptArgType_Uint, &c->max_gaze_rect_h}};
-
-  uint argi;
-  uint opts_size = sizeof(opts) / sizeof(opts[0]);
-
-  cli::Status status = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
-  if (status != cli::kStatus_Ok) {
-    std::fprintf(stderr, "Failed to parse options: %s.\n",
-                 cli::StatusMessage(status));
-    return kStatus_InvalidParamError;
-  }
-
-  return kStatus_Ok;
-}
-
-static Status ReadBlock(uint channel_count, uint block_w, uint block_h,
-                        Block* block) {
-  assert(block);
-
-  uint count = std::fread(&block->type, sizeof(block->type), 1, stdin);
-  if (count < 1) {
-    std::fprintf(stderr, "Failed to read block type.\n");
-    return kStatus_IoError;
-  }
-
-  block->channels.resize(channel_count);
-
-  uint block_area = block_w * block_h;
-  uint char_to_read_count = sizeof(float) * block_area;
-
-  for (cv::Mat1f& ch : block->channels) {
-    ch = cv::Mat1f(block_h, block_w);
-    uint count = std::fread(ch.data, sizeof(float), block_area, stdin);
-    if (count < block_area) {
-      std::fprintf(stderr, "Failed to read DCT coefficients.\n");
-      return kStatus_IoError;
+static void OnMouse(int event, int x, int y, int flags, void* mouse_position) {
+  switch (event) {
+    case cv::EVENT_MOUSEMOVE: {
+      SharedVec2& pos = *static_cast<SharedVec2*>(mouse_position);
+      std::unique_lock lock(pos.mutex);
+      pos.x = x;
+      pos.y = y;
+      break;
     }
   }
-
-  return kStatus_Ok;
-}
-
-static Status DecodeBlock(uint num_channels, uint block_w, uint block_h,
-                          boolean gazed, uint fg_quant_step, uint bg_quant_step,
-                          cv::Mat3f* decoded_block) {
-  assert(decoded_block);
-
-  Block block;
-
-  Status status = ReadBlock(num_channels, block_w, block_h, &block);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to read block.\n");
-    return kStatus_IoError;
-  }
-
-  uint quant_step = fg_quant_step;
-  if (gazed) {
-    quant_step = 1;
-  } else if (block.type == BLOCK_TYPE_BACKGROUND) {
-    quant_step = bg_quant_step;
-  }
-
-  for (cv::Mat1f& channel : block.channels) {
-    float* ch = (float*)channel.data;
-    for (uint i = 0; i < channel.total(); ++i) {
-      ch[i] /= quant_step;
-      ch[i] = std::round(ch[i]);
-      ch[i] *= quant_step;
-    }
-    cv::idct(channel, channel);
-  }
-
-  cv::merge(block.channels, *decoded_block);
-
-  return kStatus_Ok;
-}
-
-static Status DecodeFrame(uint channel_count, uint frame_w, uint frame_h,
-                          uint block_w, uint block_h, uint fg_quant_step,
-                          uint bg_quant_step, cv::Rect2i gaze_region,
-                          cv::Mat3f* decoded_frame) {
-  assert(decoded_frame);
-
-  for (uint y = 0; y < frame_h; y += block_h) {
-    for (uint x = 0; x < frame_w; x += block_w) {
-      cv::Rect roi(x, y, block_w, block_h);
-      cv::Mat3f decoded_block = (*decoded_frame)(roi);
-
-      boolean gazed = gaze_region.contains(cv::Point2i(x, y));
-
-      Status status = DecodeBlock(channel_count, block_w, block_h, gazed,
-                                  fg_quant_step, bg_quant_step, &decoded_block);
-      if (status != kStatus_Ok) {
-        std::fprintf(stderr, "Failed to decode block.\n");
-        return kStatus_UnspecifiedError;
-      }
-    }
-  }
-
-  return kStatus_Ok;
 }
 
 static cv::Rect2i CalcWithinFrameRectFromCenter(cv::Point2i center,
@@ -203,68 +104,80 @@ static cv::Rect2i CalcWithinFrameRectFromCenter(cv::Point2i center,
   return result;
 }
 
-static void OnMouse(int event, int x, int y, int flags, void* mouse_position) {
-  switch (event) {
-    case cv::EVENT_MOUSEMOVE: {
-      SharedVec2& pos = *static_cast<SharedVec2*>(mouse_position);
-      std::unique_lock lock(pos.mutex);
-      pos.x = x;
-      pos.y = y;
-      break;
-    }
+static void ParseBlock(const std::vector<std::byte>& raw_block,
+                       uint channel_count, uint block_w, uint block_h,
+                       Block& block) {
+#ifndef NDEBUG
+  uint blk_area_per_channel = block_w * block_h;
+  uint blk_area = blk_area_per_channel * channel_count;
+  uint size = sizeof(uint) + sizeof(float) * blk_area;
+  assert(raw_block.size() == size);
+#endif
+  const uint* ptr = reinterpret_cast<const uint*>(raw_block.data());
+  block.type = *ptr;
+
+  const float* src_ptr = reinterpret_cast<const float*>(ptr + 1);
+
+  block.channels.resize(channel_count);
+  for (auto& ch : block.channels) {
+    ch = cv::Mat1f(block_h, block_w);
+
+    auto dst_ptr = ch.ptr<float>();
+    std::memcpy(dst_ptr, src_ptr, sizeof(float) * ch.total());
+
+    src_ptr += ch.total();
   }
 }
 
-int main(int argc, char* argv[]) {
-  DecoderConfig cfg;
-  DefaultInit(&cfg);
-
-  Status status = ParseConfig(argc, argv, &cfg);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to parse config.\n");
-    return EXIT_FAILURE;
+static void DecodeBlock(Block& block, bool gazed, uint fg_quant_step,
+                        uint bg_quant_step, cv::Mat3f& decoded_block) {
+  uint quant_step = fg_quant_step;
+  if (gazed) {
+    quant_step = 1;
+  } else if (block.type == BLOCK_TYPE_BACKGROUND) {
+    quant_step = bg_quant_step;
   }
 
-  status = Validate(&cfg);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to validate config.\n");
-    return EXIT_FAILURE;
+  for (auto& ch : block.channels) {
+    auto ch_ptr = ch.ptr<float>();
+    for (uint i = 0; i < ch.total(); ++i) {
+      ch_ptr[i] /= quant_step;
+      ch_ptr[i] = std::round(ch_ptr[i]);
+      ch_ptr[i] *= quant_step;
+    }
+    cv::idct(ch, ch);
   }
 
-  Header header;
+  cv::merge(block.channels, decoded_block);
+}
 
-  uint count = std::fread(&header, sizeof(header), 1, stdin);
-  if (count == 0) {
-    std::fprintf(stderr, "Failed to read header.\n");
-    return EXIT_FAILURE;
-  }
-
+void Decoder::operator()() {
   cv::namedWindow(kWindowName);
 
   SharedVec2 mouse_pos = {};
   cv::setMouseCallback(kWindowName, OnMouse, &mouse_pos);
 
-  uint upscaled_frame_w = header.frame_w + header.frame_excess_w;
-  uint upscaled_frame_h = header.frame_h + header.frame_excess_h;
+  uint upscaled_frame_w = header_.frame_w + header_.frame_excess_w;
+  uint upscaled_frame_h = header_.frame_h + header_.frame_excess_h;
 
   cv::Mat3f upscaled_frame(upscaled_frame_h, upscaled_frame_w);
-  cv::Mat3f frame(header.frame_h, header.frame_w);
+  cv::Mat3f frame(header_.frame_h, header_.frame_w);
 
-  float w_ratio = (float)upscaled_frame_w / header.frame_w;
-  float h_ratio = (float)upscaled_frame_h / header.frame_h;
+  auto w_ratio = static_cast<float>(upscaled_frame_w) / header_.frame_w;
+  auto h_ratio = static_cast<float>(upscaled_frame_h) / header_.frame_h;
 
-  for (uint i = 0; i < header.frame_count; ++i) {
+  for (uint i = 0; i < header_.frame_count; ++i) {
     cv::Point2i gaze_pos;
     {
-      std::shared_lock lock(mouse_pos.mutex);
+      std::shared_lock l{mouse_pos.mutex};
       gaze_pos.x = mouse_pos.x;
       gaze_pos.y = mouse_pos.y;
     }
 
     // gaze rectangle is defined in the original frame's space
     cv::Rect2i gaze_rect = CalcWithinFrameRectFromCenter(
-        gaze_pos, cfg.max_gaze_rect_w, cfg.max_gaze_rect_h, header.frame_w,
-        header.frame_h);
+        gaze_pos, cfg_.max_gaze_rect_w, cfg_.max_gaze_rect_h, header_.frame_w,
+        header_.frame_h);
 
     // transform gaze rectangle to the upscaled frame's space
     gaze_rect.x = RoundFloatToInt(gaze_rect.x * w_ratio);
@@ -272,13 +185,27 @@ int main(int argc, char* argv[]) {
     gaze_rect.width = RoundFloatToInt(gaze_rect.width * w_ratio);
     gaze_rect.height = RoundFloatToInt(gaze_rect.height * h_ratio);
 
-    status = DecodeFrame(header.channel_count, upscaled_frame_w,
-                         upscaled_frame_h, header.transform_block_w,
-                         header.transform_block_h, cfg.foreground_quant_step,
-                         cfg.background_quant_step, gaze_rect, &upscaled_frame);
-    if (status != kStatus_Ok) {
-      std::fprintf(stderr, "Failed to decode frame.\n");
-      return EXIT_FAILURE;
+    for (uint y = 0; y < upscaled_frame_h; y += header_.transform_block_h) {
+      for (uint x = 0; x < upscaled_frame_w; x += header_.transform_block_w) {
+        std::vector<std::byte> raw_block;
+        bool empty_and_reader_done = !in_blocks_.Pop(raw_block);
+        if (empty_and_reader_done) {
+          throw std::runtime_error{"failed to read all expected blocks"};
+        }
+
+        Block block;
+        ParseBlock(raw_block, header_.channel_count, header_.transform_block_w,
+                   header_.transform_block_h, block);
+
+        cv::Rect roi(x, y, header_.transform_block_w,
+                     header_.transform_block_h);
+        cv::Mat3f decoded_block = upscaled_frame(roi);
+
+        bool gazed = gaze_rect.contains(cv::Point2i(x, y));
+
+        DecodeBlock(block, gazed, cfg_.foreground_quant_step,
+                    cfg_.background_quant_step, decoded_block);
+      }
     }
 
     upscaled_frame /= 255;

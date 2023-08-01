@@ -156,8 +156,8 @@ struct Writer {
     while (true) {
       std::vector<uchar> bytes;
 
-      bool encoder_done = !q.Pop(bytes);
-      if (encoder_done) {
+      bool empty_and_encoder_done = !q.Pop(bytes);
+      if (empty_and_encoder_done) {
         return;
       }
 

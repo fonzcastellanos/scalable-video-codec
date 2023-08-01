@@ -42,7 +42,7 @@ class CircularQueue {
 
     is_not_empty_or_is_producer_done_.wait(
         lk, [this]() { return size_ != 0 || is_producer_done_; });
-    if (is_producer_done_) {
+    if (size_ == 0 && is_producer_done_) {
       return false;
     }
 
