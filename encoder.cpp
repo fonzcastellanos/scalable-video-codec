@@ -1,38 +1,163 @@
 #include "encoder.hpp"
 
-#include <atomic>
 #include <cassert>
 #include <cstdio>
-#include <exception>
-#include <functional>
 #include <opencv2/core.hpp>
-#include <thread>
 #include <utility>
 #ifdef VISUALIZE
 #include <opencv2/highgui.hpp>
 #endif  // VISUALIZE
 #include <opencv2/imgproc.hpp>
-#include <opencv2/videoio.hpp>
 
-#include "cli.hpp"
-#include "codec.hpp"
-#include "thread.hpp"
 #ifdef VISUALIZE
 #include "draw.hpp"
 #endif  // VISUALIZE
 
-static SharedReaderEncoderData shared_reader_encoder_data{{10}, {}};
-static SharedWriterEncoderData shared_writer_encoder_data{{10}, {}};
+/*******************************************************************************
+ * Config Validation Functions    #cfg-validation
+ *******************************************************************************/
+
+Status Validate(RansacParams* params) {
+  assert(params);
+
+  if (params->inlier_thresh < 0) {
+    std::fprintf(stderr, "Inlier threshold must be >= 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (params->success_prob < 0) {
+    std::fprintf(stderr, "Success probability must be >= 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (params->inlier_ratio < 0) {
+    std::fprintf(stderr, "Inlier ratio is >= 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  return kStatus_Ok;
+}
+
+Status Validate(KMeansParams* params) {
+  assert(params);
+
+  if (params->cluster_count == 0) {
+    std::fprintf(stderr, "Cluster count must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (params->attempt_count == 0) {
+    std::fprintf(stderr, "Attempt count must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (params->max_iter_count == 0) {
+    std::fprintf(stderr, "Maximum iteration count must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (params->epsilon <= 0) {
+    std::fprintf(stderr, "Epsilon must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  return kStatus_Ok;
+}
+
+Status Validate(EncoderConfig* cfg) {
+  assert(cfg);
+
+  if (cfg->mv_block_w < 1) {
+    std::fprintf(stderr, "MV block width must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (cfg->mv_block_h < 1) {
+    std::fprintf(stderr, "MV block height must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (cfg->pyr_lvl_count < 1) {
+    std::fprintf(stderr, "Pyramid level count must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  uint top_lvl_reduction_factor = Pow2(cfg->pyr_lvl_count - 1);
+  if (cfg->mv_search_range / top_lvl_reduction_factor == 0) {
+    std::fprintf(stderr,
+                 "The quotient from dividing the MV search range by the "
+                 "top pyramid level reduction factor must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  Status status = Validate(&cfg->ransac);
+  if (status != kStatus_Ok) {
+    std::fprintf(stderr, "Failed to validate RANSAC parameters.\n");
+    return status;
+  }
+
+  status = Validate(&cfg->kmeans);
+  if (status != kStatus_Ok) {
+    std::fprintf(stderr, "Failed to validate k-means parameters.\n");
+    return status;
+  }
+
+  if (cfg->connected_components_connectivity != 4 &&
+      cfg->connected_components_connectivity != 8) {
+    std::fprintf(stderr,
+                 "Connected components connectivity must be either 4 or 8.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (cfg->transform_block_w < 1) {
+    std::fprintf(stderr, "Transform block width must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  if (cfg->transform_block_h < 1) {
+    std::fprintf(stderr, "Transform block height must be > 0.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  // IF the width and height of transform blocks are greater than the width
+  // and height, respectively, of motion blocks, AND the width and height of
+  // motion blocks are not divisible by the width and height, respectively, of
+  // transform blocks, THEN the mapping of block types from motion blocks to
+  // transform blocks would be ambiguous because a transform block would
+  // overlap with multiple motion blocks.
+  if (cfg->transform_block_w > cfg->mv_block_w) {
+    std::fprintf(stderr, "Transform block width must be <= MV block width.\n");
+    return kStatus_InvalidParamError;
+  }
+  if (cfg->transform_block_h > cfg->mv_block_h) {
+    std::fprintf(stderr,
+                 "Transform block height must be <= MV block height.\n");
+    return kStatus_InvalidParamError;
+  }
+  if (cfg->mv_block_w % cfg->transform_block_w != 0) {
+    std::fprintf(
+        stderr, "MV block width must be divisible by transform block width.\n");
+    return kStatus_InvalidParamError;
+  }
+  if (cfg->mv_block_h % cfg->transform_block_h != 0) {
+    std::fprintf(
+        stderr,
+        "MV block height must be divisible by transform block height.\n");
+    return kStatus_InvalidParamError;
+  }
+
+  return kStatus_Ok;
+}
 
 Encoder::Encoder(const EncoderConfig& cfg, const VideoProperties& vidprops,
-                 SharedReaderEncoderData& shared_reader_data,
+                 CircularQueue<cv::Mat3b>& in_queue,
                  std::future<void> attempted_first_frame_read,
-                 SharedWriterEncoderData& shared_writer_data)
+                 CircularQueue<std::vector<uchar>>& out_queue)
     : cfg_{cfg},
       vidprops_{vidprops},
-      shared_reader_data_{shared_reader_data},
+      in_queue_{in_queue},
       attempted_first_frame_read_{std::move(attempted_first_frame_read)},
-      shared_writer_data_{shared_writer_data} {
+      out_queue_{out_queue} {
   // The notation a|b denotes a divides b.
   // Theorem: If a|b and b|c, then a|c.
   //
@@ -102,32 +227,6 @@ Encoder::Encoder(const EncoderConfig& cfg, const VideoProperties& vidprops,
   }
 }
 
-struct Reader {
-  cv::VideoCapture& vc;
-  SharedReaderEncoderData& sh;
-  std::promise<void> attempted_first_frame_read;
-
-  void operator()() {
-    cv::Mat3b frame;
-
-    if (!vc.read(frame)) {
-      sh.reader_is_done = true;
-      attempted_first_frame_read.set_value();
-      return;
-    }
-
-    sh.queue.Push(frame);
-
-    attempted_first_frame_read.set_value();
-
-    while (vc.read(frame)) {
-      sh.queue.Push(frame);
-    }
-
-    sh.reader_is_done = true;
-  }
-};
-
 static std::vector<uchar> SerializeEncodedFrame(
     const std::vector<cv::Mat1f>* dct_coeffs,
     const std::vector<uint>* mv_field_block_types, uint frame_w, uint frame_h,
@@ -178,20 +277,6 @@ static std::vector<uchar> SerializeEncodedFrame(
 
   return result;
 }
-
-struct Writer {
-  SharedWriterEncoderData& sh;
-  void operator()() {
-    while (!sh.encoder_is_done || !sh.queue.IsEmpty()) {
-      auto bytes = sh.queue.Pop();
-      uint count = std::fwrite(bytes.data(), 1, bytes.size(), stdout);
-      if (count < bytes.size()) {
-        std::fprintf(stderr, "Failed to write bytes.\n");
-        return;
-      }
-    }
-  }
-};
 
 #ifdef VISUALIZE
 const char* kWindowName = "Encoding";
@@ -269,16 +354,14 @@ static void Dct(const cv::Mat3f* frame, uint block_w, uint block_h,
 void Encoder::operator()() {
   attempted_first_frame_read_.wait();
 
-  auto& inqueue = shared_reader_data_.queue;
-
-  if (inqueue.IsEmpty()) {
+  if (in_queue_.IsEmpty()) {
     // An empty queue after attempting to read the first frame implies the
     // reader is done.
-    assert(shared_reader_data_.reader_is_done);
     return;
   }
 
-  cv::Mat3b frame = inqueue.Pop();
+  cv::Mat3b frame;
+  bool reader_done = !in_queue_.Pop(frame);
 
   std::vector<cv::Mat1f> dct_coeffs(frame.channels());
   for (auto& ch : dct_coeffs) {
@@ -286,8 +369,6 @@ void Encoder::operator()() {
   }
 
   cv::Mat3f padded_frame_float(padded_frame_h_, padded_frame_w_);
-
-  auto& outqueue = shared_writer_data_.queue;
 
   {
     // TODO: Support I-frames
@@ -309,7 +390,7 @@ void Encoder::operator()() {
     auto first = reinterpret_cast<uchar*>(&h);
     auto last = first + sizeof(h);
     std::vector<uchar> buf(first, last);
-    outqueue.Push(std::move(buf));
+    out_queue_.Push(std::move(buf));
   }
 
 #ifdef VISUALIZE
@@ -382,8 +463,13 @@ void Encoder::operator()() {
   cv::extractChannel(yuv_padded_frame_, prev_y_padded_frame_, 0);
   cv::buildPyramid(prev_y_padded_frame_, prev_pyr_, cfg_.pyr_lvl_count - 1);
 
-  while (!shared_reader_data_.reader_is_done || !inqueue.IsEmpty()) {
-    frame = inqueue.Pop();
+  // while (!shared_reader_data_.reader_is_done || !inqueue.IsEmpty()) {
+  while (true) {
+    bool reader_done = !in_queue_.Pop(frame);
+    if (reader_done) {
+      break;
+    }
+
     cv::copyMakeBorder(frame, padded_frame_, 0, frame_excess_h_, 0,
                        frame_excess_w_, cv::BORDER_CONSTANT,
                        cv::Scalar(0, 0, 0));
@@ -576,7 +662,7 @@ void Encoder::operator()() {
         vidprops_.frame_h, cfg_.transform_block_w, cfg_.transform_block_h,
         mv_field_w_, mv_field_h_, cfg_.mv_block_w, cfg_.mv_block_h);
 
-    outqueue.Push(std::move(bytes));
+    out_queue_.Push(std::move(bytes));
 
 #ifdef VISUALIZE
     cv::imshow(kWindowName, window_views);
@@ -590,378 +676,9 @@ void Encoder::operator()() {
     cv::swap(prev_y_padded_frame_, y_padded_frame_);
   }
 
-  shared_writer_data_.encoder_is_done = true;
+  out_queue_.SignalProducerIsDone();
 
 #ifdef VISUALIZE
   cv::destroyAllWindows();
 #endif  // VISUALIZE
-}
-
-/*******************************************************************************
- * Default Config Values    #default-cfg
- *******************************************************************************/
-
-static void DefaultInit(KMeansParams* params) {
-  assert(params);
-
-  params->cluster_count = 10;
-  params->attempt_count = 3;
-  params->max_iter_count = 10;
-  params->epsilon = 1;
-}
-
-static void DefaultInit(RansacParams* params) {
-  assert(params);
-
-  params->subset_sz = 1;
-  params->inlier_ratio = 0.5;
-  params->success_prob = 0.99;
-  params->inlier_thresh = 7.5;
-}
-
-static void DefaultInit(EncoderConfig* cfg) {
-  assert(cfg);
-
-  cfg->mv_block_w = 16;
-  cfg->mv_block_h = 16;
-  cfg->mv_search_range = 8;
-  cfg->pyr_lvl_count = 4;
-
-  DefaultInit(&cfg->ransac);
-
-  cfg->morph_rect_w = 3;
-  cfg->morph_rect_h = 3;
-
-  DefaultInit(&cfg->kmeans);
-
-  cfg->connected_components_connectivity = 4;
-  cfg->transform_block_w = 8;
-  cfg->transform_block_h = 8;
-}
-
-/*******************************************************************************
- * Config Validation Functions    #cfg-validation
- *******************************************************************************/
-
-static Status Validate(KMeansParams* params) {
-  assert(params);
-
-  if (params->cluster_count == 0) {
-    std::fprintf(stderr, "Cluster count must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (params->attempt_count == 0) {
-    std::fprintf(stderr, "Attempt count must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (params->max_iter_count == 0) {
-    std::fprintf(stderr, "Maximum iteration count must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (params->epsilon <= 0) {
-    std::fprintf(stderr, "Epsilon must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  return kStatus_Ok;
-}
-
-static Status Validate(RansacParams* params) {
-  assert(params);
-
-  if (params->inlier_thresh < 0) {
-    std::fprintf(stderr, "Inlier threshold must be >= 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (params->success_prob < 0) {
-    std::fprintf(stderr, "Success probability must be >= 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (params->inlier_ratio < 0) {
-    std::fprintf(stderr, "Inlier ratio is >= 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  return kStatus_Ok;
-}
-
-static Status Validate(EncoderConfig* cfg) {
-  assert(cfg);
-
-  if (cfg->mv_block_w < 1) {
-    std::fprintf(stderr, "MV block width must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (cfg->mv_block_h < 1) {
-    std::fprintf(stderr, "MV block height must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (cfg->pyr_lvl_count < 1) {
-    std::fprintf(stderr, "Pyramid level count must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  uint top_lvl_reduction_factor = Pow2(cfg->pyr_lvl_count - 1);
-  if (cfg->mv_search_range / top_lvl_reduction_factor == 0) {
-    std::fprintf(stderr,
-                 "The quotient from dividing the MV search range by the "
-                 "top pyramid level reduction factor must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  Status status = Validate(&cfg->ransac);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to validate RANSAC parameters.\n");
-    return status;
-  }
-
-  status = Validate(&cfg->kmeans);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to validate k-means parameters.\n");
-    return status;
-  }
-
-  if (cfg->connected_components_connectivity != 4 &&
-      cfg->connected_components_connectivity != 8) {
-    std::fprintf(stderr,
-                 "Connected components connectivity must be either 4 or 8.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (cfg->transform_block_w < 1) {
-    std::fprintf(stderr, "Transform block width must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  if (cfg->transform_block_h < 1) {
-    std::fprintf(stderr, "Transform block height must be > 0.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  // IF the width and height of transform blocks are greater than the width
-  // and height, respectively, of motion blocks, AND the width and height of
-  // motion blocks are not divisible by the width and height, respectively, of
-  // transform blocks, THEN the mapping of block types from motion blocks to
-  // transform blocks would be ambiguous because a transform block would
-  // overlap with multiple motion blocks.
-  if (cfg->transform_block_w > cfg->mv_block_w) {
-    std::fprintf(stderr, "Transform block width must be <= MV block width.\n");
-    return kStatus_InvalidParamError;
-  }
-  if (cfg->transform_block_h > cfg->mv_block_h) {
-    std::fprintf(stderr,
-                 "Transform block height must be <= MV block height.\n");
-    return kStatus_InvalidParamError;
-  }
-  if (cfg->mv_block_w % cfg->transform_block_w != 0) {
-    std::fprintf(
-        stderr, "MV block width must be divisible by transform block width.\n");
-    return kStatus_InvalidParamError;
-  }
-  if (cfg->mv_block_h % cfg->transform_block_h != 0) {
-    std::fprintf(
-        stderr,
-        "MV block height must be divisible by transform block height.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  return kStatus_Ok;
-}
-
-static void DefaultInit(Config* c) {
-  assert(c);
-
-  DefaultInit(&c->encoder);
-
-  c->video_path = 0;
-  c->verbose = 1;
-}
-
-static Status ParseConfig(uint argc, char* argv[], Config* c) {
-  assert(argv);
-  assert(c);
-
-  EncoderConfig* ec = &c->encoder;
-
-  /*******************************************************************************
-   * Command-line Options    #options
-   *******************************************************************************/
-  cli::Opt opts[] {
-#if !defined(__SSE2__) || !defined(SVC_MOTION_SSE2)
-    {"mv-block-w", cli::kOptArgType_Uint, &ec->mv_block_w},
-        {"mv-block-h", cli::kOptArgType_Uint, &ec->mv_block_h},
-        {"pyr-lvl-count", cli::kOptArgType_Uint, &ec->pyr_lvl_count},
-#endif
-        {"mv-search-range", cli::kOptArgType_Uint, &ec->mv_search_range},
-        {"ransac-subset-sz", cli::kOptArgType_Uint, &ec->ransac.subset_sz},
-        {"ransac-inlier-thresh", cli::kOptArgType_Float,
-         &ec->ransac.inlier_thresh},
-        {"ransac-success-prob", cli::kOptArgType_Float,
-         &ec->ransac.success_prob},
-        {"ransac-inlier-ratio", cli::kOptArgType_Float,
-         &ec->ransac.inlier_ratio},
-        {"morph-rect-w", cli::kOptArgType_Uint, &ec->morph_rect_w},
-        {"morph-rect-h", cli::kOptArgType_Uint, &ec->morph_rect_h},
-        {"kmeans-cluster-count", cli::kOptArgType_Uint,
-         &ec->kmeans.cluster_count},
-        {"kmeans-attempt-count", cli::kOptArgType_Uint,
-         &ec->kmeans.attempt_count},
-        {"kmeans-max-iter-count", cli::kOptArgType_Uint,
-         &ec->kmeans.max_iter_count},
-        {"kmeans-epsilon", cli::kOptArgType_Float, &ec->kmeans.epsilon},
-        {"connected-components-connectivity", cli::kOptArgType_Uint,
-         &ec->connected_components_connectivity},
-        {"transform-block-w", cli::kOptArgType_Uint, &ec->transform_block_w},
-        {"transform-block-h", cli::kOptArgType_Uint, &ec->transform_block_h}, {
-      "verbose", cli::kOptArgType_Int, &c->verbose
-    }
-  };
-
-  uint argi;
-  uint opts_size = sizeof(opts) / sizeof(opts[0]);
-
-  cli::Status status = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
-  if (status != cli::kStatus_Ok) {
-    std::fprintf(stderr, "Failed to parse options: %s.\n",
-                 cli::StatusMessage(status));
-    return kStatus_InvalidParamError;
-  }
-
-  if (argc < argi + 1) {
-    std::fprintf(stderr, "Missing video path argument.\n");
-    return kStatus_InvalidParamError;
-  }
-
-  c->video_path = argv[argi];
-
-  return kStatus_Ok;
-}
-
-// static Status WriteEncodedFrame(const std::vector<cv::Mat1f>* dct_coeffs,
-//                                 const std::vector<uint>*
-//                                 mv_field_block_types, uint frame_w, uint
-//                                 frame_h, uint transform_block_w, uint
-//                                 transform_block_h, uint mv_field_w, uint
-//                                 mv_field_h, uint mv_block_w, uint
-//                                 mv_block_h)
-//                                 {
-//   assert(dct_coeffs);
-//   assert(mv_field_block_types);
-
-//   assert(transform_block_h > 0);
-//   assert(transform_block_w > 0);
-
-//   assert(frame_w % transform_block_h == 0);
-//   assert(frame_h % transform_block_w == 0);
-
-//   assert(mv_field_w * mv_field_h == mv_field_block_types->size());
-
-//   assert(transform_block_h <= mv_block_w);
-//   assert(transform_block_w <= mv_block_h);
-
-//   assert(mv_block_h % transform_block_w == 0);
-//   assert(mv_block_w % transform_block_h == 0);
-
-//   Status res = kStatus_IoError;
-
-//   for (uint tb_y = 0; tb_y < frame_h; tb_y += transform_block_h) {
-//     for (uint tb_x = 0; tb_x < frame_w; tb_x += transform_block_w) {
-//       uint mv_field_y = tb_y / mv_block_h;
-//       uint mv_field_x = tb_x / mv_block_w;
-//       uint mv_field_i = mv_field_y * mv_field_w + mv_field_x;
-
-//       uint btype = (*mv_field_block_types)[mv_field_i];
-
-//       uint count = std::fwrite(&btype, sizeof(btype), 1, stdout);
-//       if (count < 1) {
-//         std::fprintf(stderr, "Failed to write block type.\n");
-//         return res;
-//       }
-
-//       for (const auto& channel : (*dct_coeffs)) {
-//         float* coeffs = (float*)channel.data;
-
-//         for (uint y = tb_y; y < tb_y + transform_block_w; ++y) {
-//           float* row = &coeffs[y * frame_w + tb_x];
-
-//           uint count =
-//               std::fwrite(row, sizeof(float), transform_block_h, stdout);
-//           if (count < transform_block_h) {
-//             std::fprintf(stderr, "Failed to write DCT coefficients.\n");
-//             return res;
-//           }
-//         }
-//       }
-//     }
-//   }
-
-//   res = kStatus_Ok;
-
-//   return res;
-// }
-
-int main(int argc, char* argv[]) {
-  Config cfg;
-  DefaultInit(&cfg);
-
-  Status status = ParseConfig(argc, argv, &cfg);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to parse configuration.\n");
-    return EXIT_FAILURE;
-  }
-
-  cv::VideoCapture vidcap(cfg.video_path);
-  if (!vidcap.isOpened()) {
-    std::fprintf(stderr, "Failed to initialize video capturing.\n");
-    return EXIT_FAILURE;
-  }
-
-  status = Validate(&cfg.encoder);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to validate configuration.\n");
-    return EXIT_FAILURE;
-  }
-
-  VideoProperties vidprops{
-      static_cast<uint>(
-          vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_WIDTH)),
-      static_cast<uint>(
-          vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_HEIGHT)),
-      static_cast<uint>(
-          vidcap.get(cv::VideoCaptureProperties::CAP_PROP_FRAME_COUNT))};
-
-  if (cfg.verbose) {
-    std::fprintf(stderr, "Video properties:\n");
-    std::fprintf(stderr, "  Width: %u\n", vidprops.frame_w);
-    std::fprintf(stderr, "  Height: %u\n", vidprops.frame_h);
-    std::fprintf(stderr, "  Frame count: %u\n", vidprops.frame_count);
-  }
-
-  std::promise<void> attempted_first_frame_read_promise;
-  auto attempted_first_frame_read_future =
-      attempted_first_frame_read_promise.get_future();
-
-  Reader reader{vidcap, shared_reader_encoder_data,
-                std::move(attempted_first_frame_read_promise)};
-
-  Encoder encoder{cfg.encoder, vidprops, shared_reader_encoder_data,
-                  std::move(attempted_first_frame_read_future),
-                  shared_writer_encoder_data};
-
-  Writer writer{shared_writer_encoder_data};
-
-  std::thread read_thread{std::move(reader)};
-  // std::thread encode_thread{std::move(encoder)};
-  std::thread write_thread{std::move(writer)};
-  ThreadGuard rtg{read_thread};
-  ThreadGuard wtg{write_thread};
-
-  encoder();
 }

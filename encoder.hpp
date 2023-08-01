@@ -1,16 +1,17 @@
 #ifndef SCALABLE_VIDEO_CODEC_ENCODER_HPP
 #define SCALABLE_VIDEO_CODEC_ENCODER_HPP
 
-#include <condition_variable>
 #include <future>
-#include <mutex>
 #include <opencv2/core/mat.hpp>
 #include <vector>
 
+#include "codec.hpp"
 #include "math.hpp"
 #include "motion.hpp"
 #include "queue.hpp"
 #include "types.hpp"
+
+Status Validate(RansacParams*);
 
 struct KMeansParams {
   uint cluster_count;
@@ -18,6 +19,8 @@ struct KMeansParams {
   uint max_iter_count;
   float epsilon;
 };
+
+Status Validate(KMeansParams*);
 
 struct EncoderConfig {
   uint mv_block_w;
@@ -33,19 +36,11 @@ struct EncoderConfig {
   uint transform_block_h;
 };
 
+Status Validate(EncoderConfig*);
+
 struct EncodedFrame {
   std::vector<cv::Mat1f> dct_coeffs;
   std::vector<uint> mv_field_block_types;
-};
-
-struct SharedReaderEncoderData {
-  CircularQueue<cv::Mat3b> queue;
-  std::atomic<bool> reader_is_done;
-};
-
-struct SharedWriterEncoderData {
-  CircularQueue<std::vector<uchar>> queue;
-  std::atomic<bool> encoder_is_done;
 };
 
 struct VideoProperties {
@@ -57,17 +52,17 @@ struct VideoProperties {
 class Encoder {
  public:
   Encoder(const EncoderConfig& cfg, const VideoProperties& vidprops,
-          SharedReaderEncoderData& shared_reader_data,
+          CircularQueue<cv::Mat3b>& in_queue,
           std::future<void> attempted_first_frame_read,
-          SharedWriterEncoderData& shared_writer_data);
+          CircularQueue<std::vector<uchar>>& out_queue);
   void operator()();
 
  private:
   EncoderConfig cfg_;
   VideoProperties vidprops_;
-  SharedReaderEncoderData& shared_reader_data_;
+  CircularQueue<cv::Mat3b>& in_queue_;
   std::future<void> attempted_first_frame_read_;
-  SharedWriterEncoderData& shared_writer_data_;
+  CircularQueue<std::vector<uchar>>& out_queue_;
 
   uint padded_frame_w_;
   uint padded_frame_h_;
@@ -97,12 +92,6 @@ class Encoder {
   std::vector<uchar*> prev_pyr_data_;
   std::vector<cv::Mat1b> pyr_;
   std::vector<uchar*> pyr_data_;
-};
-
-struct Config {
-  char* video_path;
-  boolean verbose;
-  EncoderConfig encoder;
 };
 
 #endif  // SCALABLE_VIDEO_CODEC_ENCODER_HPP

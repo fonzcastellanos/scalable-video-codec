@@ -18,17 +18,19 @@ add_library(thread thread.cpp)
 add_library(draw draw.cpp)
 target_link_libraries(draw PUBLIC ${OpenCV_LIBS})
 
-add_executable(encoder encoder.cpp)
-target_link_libraries(encoder PRIVATE ${OpenCV_LIBS} cli motion thread draw)
+add_library(encoder-lib encoder.cpp)
+target_link_libraries(encoder-lib PUBLIC ${OpenCV_LIBS} motion)
 
-add_executable(encoder-visualizer encoder.cpp)
-target_link_libraries(encoder-visualizer PRIVATE ${OpenCV_LIBS} cli motion thread draw)
-target_compile_definitions(encoder-visualizer PRIVATE VISUALIZE)
+add_library(encoder-visualizer-lib encoder.cpp)
+target_link_libraries(encoder-visualizer-lib PUBLIC ${OpenCV_LIBS} motion PRIVATE draw)
+target_compile_definitions(encoder-visualizer-lib PRIVATE VISUALIZE)
 
 if (SVC_MOTION_SSE2)
-    target_compile_definitions(encoder PRIVATE SVC_MOTION_SSE2)
-    target_compile_definitions(encoder-visualizer PRIVATE SVC_MOTION_SSE2)
+    target_compile_definitions(encoder-lib PRIVATE SVC_MOTION_SSE2)
+    target_compile_definitions(encoder-visualizer-lib PRIVATE SVC_MOTION_SSE2)
 endif()
+
+add_subdirectory(apps)
 
 add_executable(decoder decoder.cpp)
 target_link_libraries(decoder PRIVATE ${OpenCV_LIBS} cli)

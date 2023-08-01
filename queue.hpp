@@ -17,51 +17,62 @@ class CircularQueue {
         capacity_{capacity},
         size_{},
         read_idx_{},
-        write_idx_{} {}
+        write_idx_{},
+        is_producer_done_{} {}
 
   void Push(T item) {
-    std::unique_lock<std::mutex> lock{mutex_};
+    std::unique_lock<std::mutex> lk{mutex_};
 
-    InterruptibleWait(is_not_full_, lock,
-                      [this]() { return size_ != capacity_; });
+    // InterruptibleWait(is_not_full_, lock,
+    //                   [this]() { return size_ != capacity_; });
 
-    // is_not_full_.wait(lock, [this]() { return size_ != capacity_; });
+    is_not_full_.wait(lk, [this]() { return size_ != capacity_; });
 
     buffer_[write_idx_] = std::move(item);
     write_idx_ = (write_idx_ + 1) % capacity_;
     ++size_;
 
-    is_not_empty_.notify_one();
+    is_not_empty_or_is_producer_done_.notify_one();
   }
 
-  T Pop() {
-    std::unique_lock<std::mutex> lock{mutex_};
+  bool Pop(T& item) {
+    std::unique_lock<std::mutex> lk{mutex_};
 
-    InterruptibleWait(is_not_empty_, lock, [this]() { return size_ != 0; });
+    // InterruptibleWait(is_not_empty_, lock, [this]() { return size_ != 0; });
 
-    // is_not_empty_.wait(lock, [this]() { return size_ != 0; });
+    is_not_empty_or_is_producer_done_.wait(
+        lk, [this]() { return size_ != 0 || is_producer_done_; });
+    if (is_producer_done_) {
+      return false;
+    }
 
-    T item = buffer_[read_idx_];
+    item = std::move(buffer_[read_idx_]);
     read_idx_ = (read_idx_ + 1) % capacity_;
     --size_;
 
     is_not_full_.notify_one();
 
-    return item;
+    return true;
+  }
+
+  void SignalProducerIsDone() {
+    std::lock_guard<std::mutex> l{mutex_};
+    is_producer_done_ = true;
+    is_not_empty_or_is_producer_done_.notify_one();
   }
 
   bool IsEmpty() {
-    std::lock_guard<std::mutex> lock{mutex_};
+    std::lock_guard<std::mutex> l{mutex_};
     return size_ == 0;
   }
 
   bool IsFull() {
-    std::lock_guard<std::mutex> lock{mutex_};
+    std::lock_guard<std::mutex> l{mutex_};
     return size_ == capacity_;
   }
 
   std::size_t Size() {
-    std::lock_guard<std::mutex> lock{mutex_};
+    std::lock_guard<std::mutex> l{mutex_};
     return size_;
   }
 
@@ -71,11 +82,12 @@ class CircularQueue {
   std::size_t size_;
   std::size_t read_idx_;
   std::size_t write_idx_;
+  bool is_producer_done_;
   std::mutex mutex_;
-  // std::condition_variable is_not_full_;
-  // std::condition_variable is_not_empty_;
-  std::condition_variable_any is_not_full_;
-  std::condition_variable_any is_not_empty_;
+  std::condition_variable is_not_full_;
+  std::condition_variable is_not_empty_or_is_producer_done_;
+  // std::condition_variable_any is_not_full_;
+  // std::condition_variable_any is_not_empty_;
 };
 
 #endif  // SCALABLE_VIDEO_CODEC_QUEUE_HPP
