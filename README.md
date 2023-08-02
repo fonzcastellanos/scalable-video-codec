@@ -2,11 +2,21 @@
 
 ![License](https://img.shields.io/github/license/fonzcastellanos/scalable-video-codec)
 
-## Overview
+This an experimental video codec that scales based on content (i.e. physical objects) and point of gaze (i.e. where the viewer is looking). Scalability, in this context, is the ability to reconstruct meaningful video information from partial decompressed streams, thereby helping video systems meet their client device processing power and network bandwidth requirements.
 
-This project is an exploration of video coding that scales based on content (i.e. physical objects) and point of gaze (i.e. where a viewer is looking). Scalability, in this context, is the ability to reconstruct meaningful video information from partial decompressed streams, thereby helping video systems meet their client device processing power and network bandwidth requirements.
+## Notable Features
+- Hiearchical block matching algorithm (HBMA) for motion estimation
+- RANSAC (random sample consensus) for global motion estimation
+- Hardware acceleration via SSE2 (Streaming SIMD Extensions 2) instructions and instruction-level parallelism (ILP) for mean absolute difference (MAD) calculations
+    - MAD is used as the error criterion in HBMA
+- Multithreaded I/O
+    - Encoder app has a main thread, a read thread, and a write thread
+    - Decoder app has a main thread and a read thread
+    - Thread-safe circular queue is used between a "producing" thread and a "consuming" thread, such as a read thread and a main thread, respectively, or a main thread and a write thread, respectively
 
-The encoder first performs block-based motion estimation and then segments the video into regions, which are sets of spatially-connected blocks with similar motion. Each region is classified either as part of the background or as a distinct moving (i.e. foreground) object. Afterwards, the encoder applies the Discrete Cosine Transform (DCT) and the resulting coefficients and identifier of each region are written to a file.
+## Description
+
+The encoder first performs block-based motion estimation and then segments the video into regions, which are sets of spatially-connected blocks with similar motion. Each region is classified either as part of the background or as a distinct moving (i.e. foreground) object. Afterwards, the encoder applies the Discrete Cosine Transform (DCT) and the resulting coefficients and identifier of each region are written to a stream.
 
 https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/1bf1e162-620e-463f-b8c2-76f2533245dd
 
@@ -16,7 +26,8 @@ For the sake of simplicity, I emulate the streaming feature. The encoder compute
 
 https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/b19de508-a9f9-4a1d-991d-59e45762e3d8
 
-## Video Model 
+
+### Video Model 
 - Illumination model: constant intensity assumption
     - Valid for spatially and temporally invariant ambient illumination sources and diffuse reflecting surfaces
     - The surface reflectance of an object does not change as the object moves
@@ -28,7 +39,7 @@ https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/b19de508-
     - Motion is translational
     - Applies to camera and objects
 
-## Encoder Steps
+### Encoder Steps
 1. Convert frame from the RGB color space to the YUV color space
 2. Extract Y (i.e. luminance) channel
     - All motion estimation is intensity-based and relies solely on the Y channel
@@ -59,7 +70,7 @@ https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/b19de508-
     - The background and each foreground region is mapped to a unique block type
     - For every transform block, the block type and the DCT coefficients for each channel are written
 
-## Decoder Steps
+### Decoder Steps
 1. Emulate bandwidth scalability and gaze control
     - If a block is in the gaze region, then no quantization occurs and substeps below are skipped
     1. The DCT coefficients of a block are quantized by dividing by either `foreground-quant-step` or `background-quant-step` (see [`decoder` usage section](#decoder)), depending on whether the block belongs to the foreground or background
@@ -140,7 +151,7 @@ Each option provided at the command-line must have its name prefixed with "--" a
 
 For example, the option `kmeans-cluster-count`, its associated argument of 12, and the video file path `foreman.mp4`, a positional parameter, would be passed to `encoder` like so. 
 ```sh
-encoder --kmeans-cluster-count 12 foreman.mp4
+./build/apps/encoder --kmeans-cluster-count 12 foreman.mp4
 ```
 
 ### encoder
@@ -148,18 +159,18 @@ encoder --kmeans-cluster-count 12 foreman.mp4
 
 To run `encoder` with the default configuration and write the encoded video to a file, execute the following command, which redirects output from `stdout` to `encoded_video_file_path`.
 ```sh
-./build/encoder video_file_path > encoded_video_file_path
+./build/apps/encoder video_file_path > encoded_video_file_path
 ```
 
 If you do not want to create a encoded video file but you still want to run the `decoder` on the `encoder` output, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command.
 ```sh
-./build/encoder video_file_path | ./build/decoder
+./build/apps/encoder video_file_path | ./build/apps/decoder
 ```
 
 ### encoder-visualizer
 To run `encoder-visualizer` with the default configuration, execute the following command.
 ```sh
-./build/encoder-visualizer video_file_path
+./build/apps/encoder-visualizer video_file_path
 ```
 ### encoder & encoder-visualizer
 
@@ -176,12 +187,12 @@ The `decoder` reads encoded video from the standard input stream `stdin`.
 
 To run `decoder` with the default configuration and read encoded video from a file, execute the following command, which redirects input from `stdin` to `encoded_video_file_path`.
 ```sh
-./build/decoder < encoded_video_file_path
+./build/apps/decoder < encoded_video_file_path
 ```
 
 If you want to run `decoder` on the output of `encoder` without creating an encoded video file, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command.
 ```sh
-./build/encoder video_file_path | ./build/decoder
+./build/apps/encoder video_file_path | ./build/apps/decoder
 ```
 
 To see the name and type of each option, search for `#options` in [`apps/decoder.cpp`](apps/decoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
