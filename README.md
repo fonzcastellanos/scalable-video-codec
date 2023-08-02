@@ -2,7 +2,8 @@
 
 ![License](https://img.shields.io/github/license/fonzcastellanos/scalable-video-codec)
 
-This an experimental video codec that scales based on content (i.e. physical objects) and point of gaze (i.e. where the viewer is looking). Scalability, in this context, is the ability to reconstruct meaningful video information from partial decompressed streams, thereby helping video systems meet their client device processing power and network bandwidth requirements.
+This an experimental video codec that scales based on content (i.e. physical objects) and point of gaze (i.e. where the viewer is looking). Scalability, in this context, is the ability to reconstruct meaningful video information from partial decompressed streams, thereby helping video systems meet their client device processing power and network bandwidth requirements. In particular, this video codec provides quality scalability by adaptively varying the color pattern accuracies of regions in each frame. Regions where the viewer is looking or that are classified as foreground objects are reconstructed at higher color pattern accuracies.
+
 
 ## Notable Features
 - Hiearchical block matching algorithm (HBMA) for motion estimation
@@ -149,7 +150,7 @@ cmake --build build --config Release --target mytarget
 ## Usage
 Each option provided at the command-line must have its name prefixed with "--" and have an associated argument following its name. Options must also be before positional parameters. 
 
-For example, the option `kmeans-cluster-count`, its associated argument of 12, and the video file path `foreman.mp4`, a positional parameter, would be passed to `encoder` like so. 
+For example, the option `kmeans-cluster-count`, its associated argument of 12, and the video file path `foreman.mp4`, a positional parameter, would be passed to `encoder` like so:
 ```sh
 ./build/apps/encoder --kmeans-cluster-count 12 foreman.mp4
 ```
@@ -157,18 +158,18 @@ For example, the option `kmeans-cluster-count`, its associated argument of 12, a
 ### encoder
 `encoder` writes the encoded video to the standard output stream `stdout`. 
 
-To run `encoder` with the default configuration and write the encoded video to a file, execute the following command, which redirects output from `stdout` to `encoded_video_file_path`.
+To run `encoder` with the default configuration and write the encoded video to a file, execute the following command, which redirects output from `stdout` to `encoded_video_file_path`:
 ```sh
 ./build/apps/encoder video_file_path > encoded_video_file_path
 ```
 
-If you do not want to create a encoded video file but you still want to run the `decoder` on the `encoder` output, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command.
+If you do not want to create a encoded video file but you still want to run the `decoder` on the `encoder` output, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command:
 ```sh
 ./build/apps/encoder video_file_path | ./build/apps/decoder
 ```
 
 ### encoder-visualizer
-To run `encoder-visualizer` with the default configuration, execute the following command.
+To run `encoder-visualizer` with the default configuration, execute the following command:
 ```sh
 ./build/apps/encoder-visualizer video_file_path
 ```
@@ -185,12 +186,12 @@ If the SSE2-based HBMA implementation is being used, then the motion vector bloc
 ### decoder
 The `decoder` reads encoded video from the standard input stream `stdin`. 
 
-To run `decoder` with the default configuration and read encoded video from a file, execute the following command, which redirects input from `stdin` to `encoded_video_file_path`.
+To run `decoder` with the default configuration and read encoded video from a file, execute the following command, which redirects input from `stdin` to `encoded_video_file_path`:
 ```sh
 ./build/apps/decoder < encoded_video_file_path
 ```
 
-If you want to run `decoder` on the output of `encoder` without creating an encoded video file, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command.
+If you want to run `decoder` on the output of `encoder` without creating an encoded video file, run `encoder` and `decoder` concurrently and connect the `stdout` of `encoder` to the `stdin` of `decoder`. Achieve this by executing the following command:
 ```sh
 ./build/apps/encoder video_file_path | ./build/apps/decoder
 ```
