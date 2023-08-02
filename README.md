@@ -83,7 +83,7 @@ The videos I used for testing were from the 2014 IEEE Change Detection Workshop 
 
 The names of the result videos follow the format `<executable-name>_<video-category>_<video-name>.mov`.
 
-For example, the name of the videos used in the [overview](#overview) are 
+For example, the name of the videos used in the [description section](#description) are 
 - `encoder-visualizer_dynamic-background_fall.mov`
 - `decoder_dynamic-background_fall.mov`.
 
