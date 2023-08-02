@@ -6,13 +6,13 @@
 
 This project is an exploration of video coding that scales based on content (i.e. physical objects) and point of gaze (i.e. where a viewer is looking). Scalability, in this context, is the ability to reconstruct meaningful video information from partial decompressed streams, thereby helping video systems meet their client device processing power and network bandwidth requirements.
 
-The encoder first performs block-based motion estimation and then segments the video into regions, which are sets of spatially-connected blocks with similar motion. Each region represents either the background or a distinct moving (i.e. foreground) object. Afterwards, the encoder applies the Discrete Cosine Transform (DCT) and the resulting coefficients and identifier of each region are written to a file.
+The encoder first performs block-based motion estimation and then segments the video into regions, which are sets of spatially-connected blocks with similar motion. Each region is classified either as part of the background or as a distinct moving (i.e. foreground) object. Afterwards, the encoder applies the Discrete Cosine Transform (DCT) and the resulting coefficients and identifier of each region are written to a file.
 
 https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/1bf1e162-620e-463f-b8c2-76f2533245dd
 
-In a typical streaming architecture, each region would be converted into quantized DCT coefficients based on bandwidth and gaze requirements, and the compressed data would be buffered for streaming. In such architectures, the continuous bandwidth sensing would control the quantization of the DCT coefficients of each region, with background transform blocks generally being more quantized than foreground transform blocks. The gaze requirements determine which transform blocks need to be more clear, with transform blocks in the gaze areas being less quantized than those outside of it. In these cases, both properties of bandwidth and gaze control are communicated by the client to the streaming encoder.
+In a typical streaming architecture, each region would be converted into quantized DCT coefficients based on bandwidth and gaze requirements, and the compressed data would be buffered for streaming. In such architectures, the continuous bandwidth sensing would control the quantization of the DCT coefficients of each region, with background transform blocks generally being more quantized than foreground transform blocks. The gaze requirements would determine which transform blocks need to be more clear, with transform blocks in the gaze area being less quantized than those outside of it. In these cases, both properties of bandwidth and gaze control would be communicated by the client to the streaming encoder.
 
-For the sake of simplicity, I emulate the streaming feature. The encoder computes and stores all the transform coefficients, but the decoder will decide on the degree of quantization to apply based on whether a region part of the foreground or is the background and where the user is gazing. This approach allows me to focus on block-based motion estimation and segmentation without tackling the the complexities of streaming. I also emulate the gaze point, which is determined by the position of the mouse cursor.
+For the sake of simplicity, I emulate the streaming feature. The encoder computes and stores all the transform coefficients, but the decoder will decide on the degree of quantization to apply based on where the user is gazing and whether a region corresponds to a foreground object or a part of the background. This approach allows me to focus on block-based motion estimation and segmentation without tackling the the complexities of streaming. I also emulate the gaze point, which is determined by the position of the mouse cursor.
 
 https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/b19de508-a9f9-4a1d-991d-59e45762e3d8
 
@@ -165,9 +165,9 @@ To run `encoder-visualizer` with the default configuration, execute the followin
 
 `encoder` and `encoder-visualizer` have the same options.
 
-To see the name and type of each option, search for `#options` in [`encoder.cpp`](encoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
+To see the name and type of each option, search for `#options` in [`apps/encoder.cpp`](apps/encoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
 
-To see the default values of the options, search for `#default-cfg` in [`encoder.cpp`](encoder.cpp). You'll see some functions containing the default values.
+To see the default values of the options, search for `#default-cfg` in [`apps/encoder.cpp`](apps/encoder.cpp). You'll see some functions containing the default values.
 
 If the SSE2-based HBMA implementation is being used, then the motion vector block dimensions and pyramid level count cannot be set and the default values are used.
 
@@ -184,9 +184,9 @@ If you want to run `decoder` on the output of `encoder` without creating an enco
 ./build/encoder video_file_path | ./build/decoder
 ```
 
-To see the name and type of each option, search for `#options` in [`decoder.cpp`](decoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
+To see the name and type of each option, search for `#options` in [`apps/decoder.cpp`](apps/decoder.cpp). You'll see an array called `opts` in the function `ParseConfig`. Each element of the array corresponds to an option and contains the name and type of the option.
 
-To see the default values of the options, search for `#default-cfg` in [`decoder.cpp`](decoder.cpp). You'll see some functions containing the default values.
+To see the default values of the options, search for `#default-cfg` in [`apps/decoder.cpp`](apps/decoder.cpp). You'll see some functions containing the default values.
 
 ## Future Direction
 - Address oversegmentation by merging regions
@@ -194,8 +194,7 @@ To see the default values of the options, search for `#default-cfg` in [`decoder
 - Derive prediction error images and compress them using the JPEG pipeline
 - Compress motion vectors using entropy coding
 - Adaptive tuning of certain parameters
-- Do I/O on a separate thread
-- Implement streaming
+- Implement network streaming
 - Eliminate dependence on OpenCV
 
 ## References
