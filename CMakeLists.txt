@@ -11,10 +11,3 @@ find_package(OpenCV REQUIRED)
 
 add_subdirectory(libs)
 add_subdirectory(apps)
-
-# add_executable(test-perf-mad test_perf_mad.cpp mad.cpp)
-
-# add_executable(test-motion test_motion.cpp mad.cpp)
-# target_link_libraries(test-motion PRIVATE ${OpenCV_LIBS} motion)
-
-# add_executable(test-queue test_queue.cpp)
