@@ -6,12 +6,13 @@
 #include <vector>
 
 #include "codec.hpp"
+#include "error.hpp"
 #include "math.hpp"
 #include "motion.hpp"
 #include "queue.hpp"
 #include "types.hpp"
 
-Status Validate(RansacParams*);
+Error Validate(const RansacParams&);
 
 struct KMeansParams {
   uint cluster_count;
@@ -20,7 +21,7 @@ struct KMeansParams {
   float epsilon;
 };
 
-Status Validate(KMeansParams*);
+Error Validate(const KMeansParams&);
 
 struct EncoderConfig {
   uint mv_block_w;
@@ -36,7 +37,7 @@ struct EncoderConfig {
   uint transform_block_h;
 };
 
-Status Validate(EncoderConfig*);
+Error Validate(const EncoderConfig&);
 
 struct EncodedFrame {
   std::vector<cv::Mat1f> dct_coeffs;

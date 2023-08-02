@@ -1,7 +1,6 @@
 #include "encoder.hpp"
 
 #include <cassert>
-#include <cstdio>
 #include <opencv2/core.hpp>
 #include <utility>
 #ifdef VISUALIZE
@@ -17,106 +16,97 @@
  * Config Validation Functions    #cfg-validation
  *******************************************************************************/
 
-Status Validate(RansacParams* params) {
-  assert(params);
-
-  if (params->inlier_thresh < 0) {
-    std::fprintf(stderr, "Inlier threshold must be >= 0.\n");
-    return kStatus_InvalidParamError;
+Error Validate(const RansacParams& p) {
+  if (p.inlier_thresh < 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid inlier threshold: must be >= 0"};
   }
 
-  if (params->success_prob < 0) {
-    std::fprintf(stderr, "Success probability must be >= 0.\n");
-    return kStatus_InvalidParamError;
+  if (p.success_prob < 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid success probability: must be >= 0"};
   }
 
-  if (params->inlier_ratio < 0) {
-    std::fprintf(stderr, "Inlier ratio is >= 0.\n");
-    return kStatus_InvalidParamError;
+  if (p.inlier_ratio < 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid inlier ratio: must be >= 0"};
   }
 
-  return kStatus_Ok;
+  return Error{ErrorCode::kOk};
 }
 
-Status Validate(KMeansParams* params) {
-  assert(params);
-
-  if (params->cluster_count == 0) {
-    std::fprintf(stderr, "Cluster count must be > 0.\n");
-    return kStatus_InvalidParamError;
+Error Validate(const KMeansParams& p) {
+  if (p.cluster_count == 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid cluster count: must be > 0"};
   }
 
-  if (params->attempt_count == 0) {
-    std::fprintf(stderr, "Attempt count must be > 0.\n");
-    return kStatus_InvalidParamError;
+  if (p.attempt_count == 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid attempt count: must be > 0"};
   }
 
-  if (params->max_iter_count == 0) {
-    std::fprintf(stderr, "Maximum iteration count must be > 0.\n");
-    return kStatus_InvalidParamError;
+  if (p.max_iter_count == 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid maximum iteration count: must be > 0"};
   }
 
-  if (params->epsilon <= 0) {
-    std::fprintf(stderr, "Epsilon must be > 0.\n");
-    return kStatus_InvalidParamError;
+  if (p.epsilon <= 0) {
+    return Error{ErrorCode::kInvalidParameter, "invalid epsilon: must be > 0"};
   }
 
-  return kStatus_Ok;
+  return Error{ErrorCode::kOk};
 }
 
-Status Validate(EncoderConfig* cfg) {
-  assert(cfg);
-
-  if (cfg->mv_block_w < 1) {
-    std::fprintf(stderr, "MV block width must be > 0.\n");
-    return kStatus_InvalidParamError;
+Error Validate(const EncoderConfig& cfg) {
+  if (cfg.mv_block_w < 1) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid mv block width: must be > 0"};
   }
 
-  if (cfg->mv_block_h < 1) {
-    std::fprintf(stderr, "MV block height must be > 0.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.mv_block_h < 1) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid mv block height: must be > 0"};
   }
 
-  if (cfg->pyr_lvl_count < 1) {
-    std::fprintf(stderr, "Pyramid level count must be > 0.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.pyr_lvl_count < 1) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid pyramid level count: must be > 0"};
   }
 
-  uint top_lvl_reduction_factor = Pow2(cfg->pyr_lvl_count - 1);
-  if (cfg->mv_search_range / top_lvl_reduction_factor == 0) {
-    std::fprintf(stderr,
-                 "The quotient from dividing the MV search range by the "
-                 "top pyramid level reduction factor must be > 0.\n");
-    return kStatus_InvalidParamError;
+  uint top_lvl_reduction_factor = Pow2(cfg.pyr_lvl_count - 1);
+  if (cfg.mv_search_range / top_lvl_reduction_factor == 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid mv search and pyramid level count: the quotient from "
+                 "dividing the mv search range by the pyramid level reduction "
+                 "factor must be > 0"};
   }
 
-  Status status = Validate(&cfg->ransac);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to validate RANSAC parameters.\n");
-    return status;
+  Error err = Validate(cfg.ransac);
+  if (err.code != ErrorCode::kOk) {
+    return Error{err.code, "validating RANSAC parameters: " + err.message};
   }
 
-  status = Validate(&cfg->kmeans);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to validate k-means parameters.\n");
-    return status;
+  err = Validate(cfg.kmeans);
+  if (err.code != ErrorCode::kOk) {
+    return Error{err.code, "validating k-means parameters: " + err.message};
   }
 
-  if (cfg->connected_components_connectivity != 4 &&
-      cfg->connected_components_connectivity != 8) {
-    std::fprintf(stderr,
-                 "Connected components connectivity must be either 4 or 8.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.connected_components_connectivity != 4 &&
+      cfg.connected_components_connectivity != 8) {
+    return Error{
+        ErrorCode::kInvalidParameter,
+        "invalid connected components connectivity: must be either 4 or 8"};
   }
 
-  if (cfg->transform_block_w < 1) {
-    std::fprintf(stderr, "Transform block width must be > 0.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.transform_block_w < 1) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid transform block width: must be > 0"};
   }
 
-  if (cfg->transform_block_h < 1) {
-    std::fprintf(stderr, "Transform block height must be > 0.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.transform_block_h < 1) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid transform block height: must be > 0"};
   }
 
   // IF the width and height of transform blocks are greater than the width
@@ -125,28 +115,29 @@ Status Validate(EncoderConfig* cfg) {
   // transform blocks, THEN the mapping of block types from motion blocks to
   // transform blocks would be ambiguous because a transform block would
   // overlap with multiple motion blocks.
-  if (cfg->transform_block_w > cfg->mv_block_w) {
-    std::fprintf(stderr, "Transform block width must be <= MV block width.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.transform_block_w > cfg.mv_block_w) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid transform block width and mv block width: transform "
+                 "block width must be <= mv block width"};
   }
-  if (cfg->transform_block_h > cfg->mv_block_h) {
-    std::fprintf(stderr,
-                 "Transform block height must be <= MV block height.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.transform_block_h > cfg.mv_block_h) {
+    return Error{
+        ErrorCode::kInvalidParameter,
+        "invalid transform block height and mv block height: transform "
+        "block height must be <= mv block height"};
   }
-  if (cfg->mv_block_w % cfg->transform_block_w != 0) {
-    std::fprintf(
-        stderr, "MV block width must be divisible by transform block width.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.mv_block_w % cfg.transform_block_w != 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid mv block width and transform block width: mv block "
+                 "width must be divisible by transform block width"};
   }
-  if (cfg->mv_block_h % cfg->transform_block_h != 0) {
-    std::fprintf(
-        stderr,
-        "MV block height must be divisible by transform block height.\n");
-    return kStatus_InvalidParamError;
+  if (cfg.mv_block_h % cfg.transform_block_h != 0) {
+    return Error{ErrorCode::kInvalidParameter,
+                 "invalid mv block height and transform block height: mv block "
+                 "height must be divisible by transform block height"};
   }
 
-  return kStatus_Ok;
+  return Error{ErrorCode::kOk};
 }
 
 Encoder::Encoder(const EncoderConfig& cfg, const VideoProperties& vidprops,

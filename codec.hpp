@@ -5,13 +5,6 @@
 
 #define BLOCK_TYPE_BACKGROUND 0
 
-enum Status {
-  kStatus_Ok,
-  kStatus_UnspecifiedError,
-  kStatus_InvalidParamError,
-  kStatus_IoError
-};
-
 struct Header {
   uint frame_count;
   uint frame_w;

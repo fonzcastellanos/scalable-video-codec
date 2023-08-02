@@ -64,7 +64,7 @@ static void DefaultInit(Config& c) {
   c.verbose = 1;
 }
 
-static Status ParseConfig(uint argc, char* argv[], Config& c) {
+static Error ParseConfig(uint argc, char* argv[], Config& c) {
   assert(argv);
 
   EncoderConfig* ec = &c.encoder;
@@ -108,19 +108,18 @@ static Status ParseConfig(uint argc, char* argv[], Config& c) {
 
   cli::Status status = cli::ParseOpts(argc, argv, opts, opts_size, &argi);
   if (status != cli::kStatus_Ok) {
-    std::fprintf(stderr, "Failed to parse options: %s.\n",
-                 cli::StatusMessage(status));
-    return kStatus_InvalidParamError;
+    std::string msg{"parsing options: "};
+    msg += cli::StatusMessage(status);
+    return Error{ErrorCode::kUnspecified, std::move(msg)};
   }
 
   if (argc < argi + 1) {
-    std::fprintf(stderr, "Missing video path argument.\n");
-    return kStatus_InvalidParamError;
+    return Error{ErrorCode::kUnspecified, "missing video path argument"};
   }
 
   c.video_path = argv[argi];
 
-  return kStatus_Ok;
+  return Error{ErrorCode::kOk};
 }
 
 struct Reader {
@@ -177,21 +176,22 @@ int main(int argc, char* argv[]) {
   Config cfg;
   DefaultInit(cfg);
 
-  Status status = ParseConfig(argc, argv, cfg);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to parse configuration.\n");
+  Error err = ParseConfig(argc, argv, cfg);
+  if (err.code != ErrorCode::kOk) {
+    std::fprintf(stderr, "parsing configuration: %s\n", err.message.c_str());
+    return EXIT_FAILURE;
+  }
+
+  err = Validate(cfg.encoder);
+  if (err.code != ErrorCode::kOk) {
+    std::fprintf(stderr, "validating configuration: %s.\n",
+                 err.message.c_str());
     return EXIT_FAILURE;
   }
 
   cv::VideoCapture vidcap(cfg.video_path);
   if (!vidcap.isOpened()) {
-    std::fprintf(stderr, "Failed to initialize video capturing.\n");
-    return EXIT_FAILURE;
-  }
-
-  status = Validate(&cfg.encoder);
-  if (status != kStatus_Ok) {
-    std::fprintf(stderr, "Failed to validate configuration.\n");
+    std::fprintf(stderr, "failed to initialize video capturing\n");
     return EXIT_FAILURE;
   }
 
