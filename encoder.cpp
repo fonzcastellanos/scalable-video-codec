@@ -8,6 +8,7 @@
 #endif  // VISUALIZE
 #include <opencv2/imgproc.hpp>
 
+#include "codec.hpp"
 #ifdef VISUALIZE
 #include "draw.hpp"
 #endif  // VISUALIZE
@@ -219,20 +220,17 @@ Encoder::Encoder(const EncoderConfig& cfg, const VideoProperties& vidprops,
 }
 
 static std::vector<uchar> SerializeEncodedFrame(
-    const std::vector<cv::Mat1f>* dct_coeffs,
-    const std::vector<uint>* mv_field_block_types, uint frame_w, uint frame_h,
+    const std::vector<cv::Mat1f>& dct_coeffs,
+    const std::vector<uint>& mv_field_block_types, uint frame_w, uint frame_h,
     uint transform_block_w, uint transform_block_h, uint mv_field_w,
     uint mv_field_h, uint mv_block_w, uint mv_block_h) {
-  assert(dct_coeffs);
-  assert(mv_field_block_types);
-
   assert(transform_block_h > 0);
   assert(transform_block_w > 0);
 
   assert(frame_w % transform_block_h == 0);
   assert(frame_h % transform_block_w == 0);
 
-  assert(mv_field_w * mv_field_h == mv_field_block_types->size());
+  assert(mv_field_w * mv_field_h == mv_field_block_types.size());
 
   assert(transform_block_h <= mv_block_w);
   assert(transform_block_w <= mv_block_h);
@@ -248,19 +246,20 @@ static std::vector<uchar> SerializeEncodedFrame(
       uint mv_field_x = tb_x / mv_block_w;
       uint mv_field_i = mv_field_y * mv_field_w + mv_field_x;
 
-      uint btype = (*mv_field_block_types)[mv_field_i];
+      uint btype = mv_field_block_types[mv_field_i];
 
-      result.insert(result.end(), (uchar*)(&btype),
-                    ((uchar*)(&btype)) + sizeof(btype));
+      result.insert(result.end(), reinterpret_cast<uchar*>(&btype),
+                    reinterpret_cast<uchar*>(&btype) + sizeof(btype));
 
-      for (const auto& channel : (*dct_coeffs)) {
-        float* coeffs = (float*)channel.data;
+      for (const auto& channel : dct_coeffs) {
+        const auto* ch = channel.ptr<float>();
 
         for (uint y = tb_y; y < tb_y + transform_block_w; ++y) {
-          float* row = &coeffs[y * frame_w + tb_x];
+          const auto* row = &ch[y * frame_w + tb_x];
 
-          result.insert(result.end(), (uchar*)row,
-                        ((uchar*)row) + sizeof(float) * transform_block_h);
+          result.insert(result.end(), reinterpret_cast<const uchar*>(row),
+                        reinterpret_cast<const uchar*>(row) +
+                            sizeof(float) * transform_block_h);
         }
       }
     }
@@ -321,19 +320,16 @@ static void BuildMvFeatures(const Vec2f* mv_field, uint mv_field_w,
   }
 }
 
-static void Dct(const cv::Mat3f* frame, uint block_w, uint block_h,
-                std::vector<cv::Mat1f>* coeffs) {
-  assert(frame);
-  assert(coeffs);
-
+static void Dct(const cv::Mat3f& frame, uint block_w, uint block_h,
+                std::vector<cv::Mat1f>& coeffs) {
   assert(block_h > 0);
   assert(block_w > 0);
 
-  cv::split(*frame, *coeffs);
+  cv::split(frame, coeffs);
 
-  for (const auto& channel : *coeffs) {
-    for (uint y = 0; y < frame->rows; y += block_h) {
-      for (uint x = 0; x < frame->cols; x += block_w) {
+  for (const auto& channel : coeffs) {
+    for (uint y = 0; y < frame.rows; y += block_h) {
+      for (uint x = 0; x < frame.cols; x += block_w) {
         cv::Rect roi(x, y, block_w, block_h);
         cv::Mat1f block = channel(roi);
         cv::dct(block, block);
@@ -355,8 +351,8 @@ void Encoder::operator()() {
   bool empty_and_reader_done = !in_queue_.Pop(frame);
 
   std::vector<cv::Mat1f> dct_coeffs(frame.channels());
-  for (auto& ch : dct_coeffs) {
-    ch = cv::Mat1f(padded_frame_h_, padded_frame_w_);
+  for (auto& channel : dct_coeffs) {
+    channel = cv::Mat1f(padded_frame_h_, padded_frame_w_);
   }
 
   cv::Mat3f padded_frame_float(padded_frame_h_, padded_frame_w_);
@@ -454,7 +450,6 @@ void Encoder::operator()() {
   cv::extractChannel(yuv_padded_frame_, prev_y_padded_frame_, 0);
   cv::buildPyramid(prev_y_padded_frame_, prev_pyr_, cfg_.pyr_lvl_count - 1);
 
-  // while (!shared_reader_data_.reader_is_done || !inqueue.IsEmpty()) {
   while (true) {
     bool empty_and_reader_done = !in_queue_.Pop(frame);
     if (empty_and_reader_done) {
@@ -570,8 +565,9 @@ void Encoder::operator()() {
                         cfg_.mv_block_h, foreground_mv_field_indices_.data(),
                         foreground_mv_field_indices_.size(),
                         foreground_mv_features_.data());
-        cv::Mat4f fg_mv_features(foreground_mv_features_.size(), 1,
-                                 (cv::Vec4f*)foreground_mv_features_.data());
+        cv::Mat4f fg_mv_features(
+            foreground_mv_features_.size(), 1,
+            reinterpret_cast<cv::Vec4f*>(foreground_mv_features_.data()));
 
         cv::TermCriteria term_crit(
             cv::TermCriteria::COUNT | cv::TermCriteria::EPS,
@@ -581,7 +577,7 @@ void Encoder::operator()() {
                    cfg_.kmeans.attempt_count, cv::KMEANS_PP_CENTERS);
       }
 
-      int* cluster_ids_ = (int*)cluster_ids.data;
+      auto* cluster_ids_ = cluster_ids.ptr<int>();
 
 #ifdef VISUALIZE
       for (uint& cid : foreground_cluster_ids) {
@@ -615,7 +611,7 @@ void Encoder::operator()() {
             cfg_.connected_components_connectivity, CV_32S,
             cv::ConnectedComponentsAlgorithmsTypes::CCL_DEFAULT);
 
-        int* conn_comp_ids_ = (int*)conn_comp_ids.data;
+        auto* conn_comp_ids_ = conn_comp_ids.ptr<int>();
         for (uint i : foreground_mv_field_indices_) {
           if (conn_comp_ids_[i] == 0) {
             continue;
@@ -640,8 +636,8 @@ void Encoder::operator()() {
 #endif  // VISUALIZE
 
     padded_frame_.convertTo(padded_frame_float, CV_32FC3);
-    Dct(&padded_frame_float, cfg_.transform_block_w, cfg_.transform_block_h,
-        &dct_coeffs);
+    Dct(padded_frame_float, cfg_.transform_block_w, cfg_.transform_block_h,
+        dct_coeffs);
 
     std::vector<cv::Mat1f> dct_coeffs_copy(dct_coeffs.size());
     for (decltype(dct_coeffs)::size_type i = 0; i < dct_coeffs.size(); ++i) {
@@ -649,7 +645,7 @@ void Encoder::operator()() {
     }
 
     std::vector<uchar> bytes = SerializeEncodedFrame(
-        &dct_coeffs_copy, &mv_field_block_types_, vidprops_.frame_w,
+        dct_coeffs_copy, mv_field_block_types_, vidprops_.frame_w,
         vidprops_.frame_h, cfg_.transform_block_w, cfg_.transform_block_h,
         mv_field_w_, mv_field_h_, cfg_.mv_block_w, cfg_.mv_block_h);
 

@@ -5,7 +5,6 @@
 #include <opencv2/core/mat.hpp>
 #include <vector>
 
-#include "codec.hpp"
 #include "error.hpp"
 #include "math.hpp"
 #include "motion.hpp"
