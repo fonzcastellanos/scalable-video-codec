@@ -46,13 +46,13 @@ https://github.com/fonzcastellanos/scalable-video-codec/assets/4334520/b19de508-
     - All motion estimation is intensity-based and relies solely on the Y channel
 3. Estimate block-wise motion
     - Achieved by a variation of the hierarchical block matching algorithm (HBMA)
-        - For more details, open the file [`motion.hpp`](motion.hpp) and read the comment block at the top of the file and the comment block for the function `EstimateMotionHierarchical`
-        - If Streaming SIMD Extensions 2 (SSE2) is supported on your platform, then a SSE2-based HBMA implementation (see function `EstimateMotionHierarchical16x16Sse2` in file [`motion.hpp`](motion.hpp)) is used to improve performance
+        - For more details, open the file [`motion.hpp`](libs/motion.hpp) and read the comment block at the top of the file and the comment block for the function `EstimateMotionHierarchical`
+        - If Streaming SIMD Extensions 2 (SSE2) is supported on your platform, then a SSE2-based HBMA implementation (see function `EstimateMotionHierarchical16x16Sse2` in file [`motion.hpp`](libs/motion.hpp)) is used to improve performance
 4. Estimate global motion using random sample consensus (RANSAC)
     - Global motion is assumed to be the camera motion
     - Inlier group is assumed to be the background motion vectors
     - Outlier group is assumed to be the foreground motion vectors
-    - For more details, open the file [`motion.hpp`](motion.hpp) and read the comment block at the top of the file and the comment block for the function `EstimateGlobalMotionRansac`
+    - For more details, open the file [`motion.hpp`](libs/motion.hpp) and read the comment block at the top of the file and the comment block for the function `EstimateGlobalMotionRansac`
 5. Create foreground mask from outlier group
 6. Improve spatial connectivity and remove noise in the foreground mask
     - Achieved by applying the closing and opening morphological operators in the stated order
